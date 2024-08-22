@@ -1,0 +1,859 @@
+---
+title: "Extract TAS2R SNPs"
+format: html
+editor: visual
+---
+
+```{r}
+library(here)
+library(janitor)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(tidyverse)
+library(stringr)
+```
+
+## Imputation files
+
+Convert imputation files (bgen to bfile)
+
+```{bash}
+#copy to terminal
+BGEN=/home/mojan/Mojan_data/Genomics3_clsa
+IMP=/home/mojan/Mojan_data/Genomics3_clsa/imp.new
+
+conda activate mojan_plink
+
+for chr in {5,7,12}
+do
+plink2 --bgen $BGEN/clsa_imp_${chr}_v3.bgen ref-first \
+        --sample $BGEN/clsa_imp_v3.sample --hwe 3.15e-10 \
+        --allow-extra-chr --make-bed \
+        --out $IMP/clsa_imp_${chr}_v3
+done
+
+
+
+#Convert to PLINK format
+for chr in {5,7,12}
+do
+plink2 --bfile $IMP/clsa_imp_${chr}_v3 \
+        --make-pgen \
+        --out $IMP/clsa_imp_${chr}_v3
+done
+```
+
+Merge imputation bfiles
+
+```{bash}
+IMP=/home/mojan/Mojan_data/Genomics3_clsa/imp.new
+
+
+# Merge all plink chromosome files into one single file by making merge list
+# ls -t list all files by time
+#tac cat in reverse starts from the last line
+# grep -v return all non-matching terms 
+
+#ls -t $IMP/clsa_imp_*_v3.pgen | tac | sed 's/.pgen//g' \
+#> $IMP/clsa_imp_v3_newfiles.merge.list
+
+plink --bfile $IMP/clsa_imp_5_v3 \
+        --merge-list  $IMP/clsa_imp_v3_newfiles.merge.list \
+        --make-bed --out $IMP/clsa_imp_merged_v3
+
+#Note that sex needs to be added in the future. Also check what sex mismatch errors were detected
+      
+```
+
+Filter imputation files based on quality score
+
+```{bash}
+DATA=/home/mojan/Mojan_data/Genetics/Genomics3_clsa
+IMP=$DATA/imp.new
+#to remove low quality imputation SNPs:
+#zcat to unzip the imputation files
+#filter for markers with quality (Rsq) > 0.8 for both batches (column 5 and 7)
+#delete the header (NR)
+# combine the files
+for chr in {5,7,12}
+do
+zcat $DATA/clsa_mfi_${chr}_v3.txt.gz | awk ' $5 <= 0.8 || $7 <= 0.8 {print $1}' | awk 'NR>1'  > $IMP/clsa_imp_${chr}_v3.txt
+cat $IMP/clsa_imp_${chr}_v3.txt >> $IMP/imp_markers_to_exclude.txt
+done
+```
+
+## Marker quality control
+
+```{r}
+bgen
+clsa_mqc <- read.table("~/Mojan_data/Genomics3_clsa/clsa_mqc_v3.txt", header = TRUE)
+#exclude markers for which quality control failed for batch discordance, hwe test, control genotype discordance, sex genotype frequency discordance
+#exclude low maf and indel
+clsa_mqc_exclude <- clsa_mqc %>%  filter(
+  batch_disc!=0  | hwe_disc!=0 | ctl_disc!=0 | sex_disc !=0 | indel!=0)
+
+#Add a column to show: chr1:position:allele1:allele2
+clsa_mqc_exclude <- clsa_mqc_exclude %>%
+  mutate(marker = paste(chromosome, position, allele_1, allele_2, sep = ":")) %>% mutate(marker=paste("chr",marker, sep=""))
+
+imp_to_exclude <- read.table("~/Mojan_data/Genomics3_clsa/imp.new/imp_markers_to_exclude.txt")
+
+total_markers_exclude_mcq_rsq <- rbind(as.matrix(select(clsa_mqc_exclude, marker)),
+                              as.matrix(imp_to_exclude))
+#write rs_ids to a text file
+write.table(total_markers_exclude_mcq_rsq, "~/Mojan_data/Genomics3_clsa/imp.new/02_total_markers_exclude_mcq_rsq.txt", row.names = FALSE, quote = FALSE, col.names=FALSE)
+```
+
+## Sample quality control
+
+```{r}
+sample_qc <- read.table(("/home/mojan/Mojan_data/Genetics/Genomics3_clsa/clsa_sqc_v3.txt"), header=TRUE)
+#exclude related individuals and outliers in heterozygosity or genotype missingness
+high_sample <- sample_qc %>% filter(in.kinship==0 & in.hetmiss==0) %>% #number of high quality samples= 24,941
+filter(chromosomal.sex==selfreported.gender) #remove sex missmatches (chromosomally and self-reported)
+high_qc_id <- select(high_sample,ADM_GWAS_COM) %>% rename(fid=ADM_GWAS_COM) %>% mutate(iid=fid)
+
+#total population output
+high_sample_id <- select(high_sample,ADM_GWAS_COM) %>% rename(fid=ADM_GWAS_COM) %>% mutate(iid=fid)
+write.table(high_sample_id, "~/Mojan_data/Genetics/Genomics3_clsa/imp.new/03_total_population_hq_sample.txt",  col.names=FALSE, quote = FALSE, row.names = FALSE)
+
+#european ancestry subset
+european <- high_sample %>% filter(pca.cluster.id==4)
+
+european_id <- select(european,ADM_GWAS_COM) %>% rename(fid=ADM_GWAS_COM) %>% mutate(iid=fid)
+
+write.table(european_id, "~/Mojan_data/Genetics/Genomics3_clsa/imp.new/01_european_hq_sample.txt", col.names=FALSE, quote = FALSE, row.names = FALSE)
+
+#noneuropean ancestry subset
+noneuropean_id <- select((noneuropean <- high_sample %>% filter(pca.cluster.id!=4)), ADM_GWAS_COM)%>% rename(fid=ADM_GWAS_COM) %>% mutate(iid=fid)
+
+write.table(noneuropean_id, "~/Mojan_data/Genomics3_clsa/imp.new/01_noneuropean_hq_sample.txt", col.names=FALSE, quote = FALSE, row.names = FALSE)
+
+write.table(
+  noneuropean %>%
+    rename(FID = ADM_GWAS_COM, Sex = chromosomal.sex) %>%
+    mutate(IID = FID) %>%
+    select(FID, IID, Sex),
+  "~/Mojan_data/Genomics3_clsa/output/oral_health/update_sex_noneuropean.txt",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+
+```
+
+## Apply sample marker quality control
+
+```{bash}
+IMP=/home/mojan/Mojan_data/Genomics3_clsa/imp.new
+OUT=/home/mojan/Mojan_data/Genomics3_clsa/output
+
+#to perform the QC step
+#Filtering the formatted bfiles so that the sex and phenotype column is correct
+#Then filtering by MAF 0.01 so we only have biallelic SNPS
+
+
+plink --bfile $IMP/clsa_imp_merged_v3 --keep $IMP/01_european_hq_sample.txt\
+      --exclude $IMP/02_total_markers_exclude_mcq_rsq.txt\
+      --maf 0.01 --geno 0.05 --hwe 0.000000000315 --mind 0.05 \
+      --make-bed --out $OUT/clsa_imp_v3_european_sm_qc_maf_0.01
+
+ 
+```
+
+## Add gene names
+
+Add TAS2R names as the last column
+
+```{r}
+imp <- clsa_total
+colnames(imp)<-c('chr', 'snp', 'na', 'position', 'minor.al', 'ref.al')
+imp$TAS2R<-0
+#TAS2R1
+    for (x in 1:4210){
+      if (imp[x,1]==5){
+  imp[x,7] <- "TAS2R1"
+  }
+    }
+
+#TAS2R2P
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=12491095	& imp[x,4]<=12492004){
+        imp[x,7] <- "TAS2R2P"
+    }
+  }
+}
+
+#TAS2R3
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=141764097 	& imp[x,4]<=141765197 ){
+        imp[x,7] <- "TAS2R3"
+    }
+  }
+}
+#TAS2R4
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=141776674 	& imp[x,4]<=141781691 ){
+        imp[x,7] <- "TAS2R4"
+    }}}
+
+#TAS2R5
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=141790217  	& imp[x,4]<=141791367  ){
+        imp[x,7] <- "TAS2R5"
+    }}}
+
+#TAS2R16
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=122994704    	& imp[x,4]<=122995700    ){
+        imp[x,7] <- "TAS2R16"
+    }}}
+
+#TAS2R38
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=141972631     	& imp[x,4]<=141973773     ){
+        imp[x,7] <- "TAS2R38"
+    }}}
+
+#TAS2R39
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=  143183419   	& imp[x,4]<=  143184435    ){
+        imp[x,7] <- "TAS2R39"
+    }}}
+
+#TAS2R40
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=  143222037 & imp[x,4]<= 143223079){
+        imp[x,7] <- "TAS2R40"
+    }}}
+View(imp)
+
+#TAS2R41
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=  143477873  & imp[x,4]<= 143478796 ){
+        imp[x,7] <- "TAS2R41"
+    }}}
+
+#TAS2R60
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=  143443453   & imp[x,4]<= 143444409  ){
+        imp[x,7] <- "TAS2R60"
+    }}}
+
+#TAS2R62P
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=  143437034    & imp[x,4]<= 143437973 ){
+        imp[x,7] <- "TAS2R62P"
+    }}}
+
+#TAS2R7
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>= 10801532      & imp[x,4]<= 10802627  ){
+        imp[x,7] <- "TAS2R7"
+    }}}
+
+#TAS2R8
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10806051     & imp[x,4]<= 10807286 ){
+        imp[x,7] <- "TAS2R8"
+    }}}
+
+#TAS2R9
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10809094      & imp[x,4]<= 10810168  ){
+        imp[x,7] <- "TAS2R9"
+    }}}
+
+#TAS2R10
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10825219       & imp[x,4]<= 10826358   ){
+        imp[x,7] <- "TAS2R10"
+    }}}
+
+#TAS2R12P
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10894934        & imp[x,4]<= 10895881    ){
+        imp[x,7] <- "TAS2R12P"
+    }}}
+
+#TAS2R13
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10907926 & imp[x,4]<= 10909562){
+        imp[x,7] <- "TAS2R13"
+    }}}
+
+#TAS2R14
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10937410  & imp[x,4]<= 10939263 ){
+        imp[x,7] <- "TAS2R14"
+    }}}
+
+#TAS2R15P
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10964425   & imp[x,4]<= 10965352  ){
+        imp[x,7] <- "TAS2R15P"
+    }}}
+
+#TAS2R18P
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11158776    & imp[x,4]<= 11159694   ){
+        imp[x,7] <- "TAS2R18P"
+    }}}
+
+#TAS2R19
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11021619     & imp[x,4]<= 11022620    ){
+        imp[x,7] <- "TAS2R19"
+    }}}
+
+#TAS2R20
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10995961      & imp[x,4]<= 10998304     ){
+        imp[x,7] <- "TAS2R20"
+    }}}
+
+#TAS2R30
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11132958       & imp[x,4]<= 11134644      ){
+        imp[x,7] <- "TAS2R30"
+    }}}
+
+#TAS2R31
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11030387  & imp[x,4]<= 11031407      ){
+        imp[x,7] <- "TAS2R31"
+    }}}
+
+#TAS2R42
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11185993   & imp[x,4]<= 11186937       ){
+        imp[x,7] <- "TAS2R42"
+    }}}
+
+#TAS2R43
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11091287    & imp[x,4]<= 11092313        ){
+        imp[x,7] <- "TAS2R43"
+    }}}
+
+#TAS2R46
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11061365     & imp[x,4]<= 11062294         ){
+        imp[x,7] <- "TAS2R46"
+    }}}
+
+#TAS2R50
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  10985913      & imp[x,4]<= 10986912          ){
+        imp[x,7] <- "TAS2R50"
+    }}}
+
+#TAS2R63P
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11048332       & imp[x,4]<= 11049256           ){
+        imp[x,7] <- "TAS2R63P"
+    }}}
+
+#TAS2R64P
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11077316& imp[x,4]<= 11078242){
+        imp[x,7] <- "TAS2R64P"
+    }}}
+
+#TAS2R67P
+for (x in 1:4210){
+  if (imp[x,1]==12){
+    if (imp[x,4]>=  11179541 & imp[x,4]<= 11180462 ){
+        imp[x,7] <- "TAS2R67P"
+    }}}
+
+#TAS2R6P
+for (x in 1:4210){
+  if (imp[x,1]==7){
+    if (imp[x,4]>=  141787815  & imp[x,4]<= 141788640  ){
+        imp[x,7] <- "TAS2R6P"
+  }}}      
+
+
+```
+
+Bar plots SNP count for each TAS2R type
+
+```{r}
+
+# Create a bar graph with the custom color
+ggplot(gene_count_df, aes(x = reorder(Genes, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "#565D6C") +
+  labs(title = "TAS2R Genes Count", x = "TAS2R Genes", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+# Create a bar graph for TAS2R pseudogenes
+ggplot(pseudogene_count_df, aes(x = reorder(Pseudogenes, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "#565D6C") +
+  labs(title = "TAS2R Pseudogenes Count", x = "TAS2R Pseudogenes", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  scale_y_continuous(limits = c(0, 500), breaks = seq(0, 500, by = 100))
+
+```
+
+Plot frequencies
+
+```{R}
+library(here)
+library(readxl)
+true <- read_xlsx(here("snp.xlsx"), sheet = "TAS2Rs")
+true$maf <- as.numeric(true$maf)
+library(ggplot2)
+ggplot(true, aes(x = snp, y = maf)) +
+  geom_point(alpha = 0.5, size = 0.7) +  # Use transparency and smaller point sizes
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.line = element_blank()) +  # Remove the x-axis line
+  labs(x = "SNP ID", y = "Minor Allele Frequency", title = "Minor Allele Frequencies of TAS2Rs' SNPs") +
+  coord_cartesian(ylim = c(-0.05, 0.5))  # Set the limits of y-axis
+
+#pseudogenes
+ps <- read_xlsx(here("snp.xlsx"), sheet = "Pseudogenes")
+ps$maf <- as.numeric(ps$maf)
+library(ggplot2)
+ggplot(ps, aes(x = snp, y = maf)) +
+  geom_point(alpha = 0.5, size = 0.7) +  # Use transparency and smaller point sizes
+  theme_minimal() +
+  theme(axis.text.x = element_blank(), axis.line = element_blank()) +  # Remove the x-axis line
+  labs(x = "SNP", y = "Minor Allele Frequency", title = "Minor Allele Frequencies of TAS2R Pseudogenes' SNPs") +
+  coord_cartesian(ylim = c(-0.05, 0.5))  # Set the limits of y-axis
+
+```
+
+## Add annotations
+
+load clsa total and european
+
+```{r}
+type <- read_excel("~/Mojan_data/Genetics/Genomics3_clsa/Genetics_scripts/final_snp.xlsx", sheet="clsa_not0") %>% 
+  mutate_all(str_to_lower) %>% 
+  mutate(chromosome=as.numeric(chromosome), position=as.numeric(position))
+
+clsa_total <- read.table("~/Mojan_data/Genetics/Genomics3_clsa/output/frq_t2r_total_sm_qc.frq", header = TRUE) %>%
+  mutate_all(str_to_lower) %>% 
+  clean_names() %>% 
+  mutate(position = strsplit(snp, ":") %>% sapply(`[[`, 2)) %>%
+  select(snp, chr, position, everything()) %>% 
+  mutate(position=as.numeric(position)) %>% 
+  rename(chromosome=chr, major_allele=a2, minor_allele=a1, clsa_nonmissing_allele_count=nchrobs, clsa_maf=maf)%>% 
+  mutate(chromosome=as.numeric(chromosome))
+clsa_total <- left_join(clsa_total, type %>% select(chromosome, position, tas2r), by = c("chromosome", "position")) 
+
+clsa_european <- read.table("/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output/frq_t2r_european_sm_qc_maf0.01.frq", header = TRUE) %>%
+  mutate_all(str_to_lower) %>% 
+  clean_names() %>% 
+  mutate(position = strsplit(snp, ":") %>% sapply(`[[`, 2)) %>%
+  select(snp, chr, position, everything()) %>% 
+  mutate(position=as.numeric(position)) %>% 
+  rename(chromosome=chr, major_allele=a2, minor_allele=a1, clsa_nonmissing_allele_count=nchrobs, clsa_maf=maf)%>% 
+  mutate(chromosome=as.numeric(chromosome))
+clsa_european <- left_join(clsa_european, type %>% select(chromosome, position, tas2r), by = c("chromosome", "position")) 
+
+```
+
+##Create a table for uploading in Ensembl
+
+```{r}
+dot_col <- rep(".", 528)
+dot_col2 <- rep(".", 528)
+dot_col3 <- rep(".", 528)
+dot_col4 <- rep(".", 528)
+chr <- total_clsa$chromosome
+bp <- total_clsa$position
+major <- total_clsa$major_allele
+minor <- total_clsa$minor_allele
+
+new_data <- data.frame(chr, bp, dot_col, major, minor, dot_col2, dot_col3, dot_col4)
+
+write.table(new_data, "total_for_ensembl_major_first.txt", quote = F, row.names = F, col.names = F)
+```
+
+ensembl_european upload
+
+```{r}
+library(readODS)
+ensembl_european<- read_ods("~/Mojan_data/Genomics3_clsa/Genetics_scripts/ensembl_european_major_first.ods") %>% 
+  clean_names() %>% 
+  mutate_all(str_to_lower) %>% 
+  filter(consequence!="regulatory_region_variant") %>% 
+  separate(location, into = c("chromosome", "position"), sep = "[:-]", remove = FALSE) %>%
+  mutate(position = as.numeric(position)) %>% 
+  arrange(position) %>% mutate(chromosome=as.numeric(chromosome)) %>% 
+  rename(minor_allele=allele)
+
+ensembl_total<- read_ods("~/Mojan_data/Genomics3_clsa/Genetics_scripts/ensembl_total_major_first.ods") %>% 
+  clean_names() %>% 
+  mutate_all(str_to_lower) %>% 
+  filter(consequence!="regulatory_region_variant") %>% 
+  separate(location, into = c("chromosome", "position"), sep = "[:-]", remove = FALSE) %>%
+  mutate(position = as.numeric(position)) %>% 
+  arrange(position) %>% mutate(chromosome=as.numeric(chromosome)) %>% 
+  rename(minor_allele=allele)
+
+```
+
+merge clsa european with ensembel
+
+```{r}
+#european
+clsa_ensembl_european <- left_join(clsa_european, ensembl_european,by=c("chromosome","position", "minor_allele"))%>% 
+  mutate(type = case_when(
+    str_detect(tas2r, "p") ~ "pseudogene",
+    TRUE ~ "true"
+  ))
+
+clsa_ensembl_european <- clsa_ensembl_european %>% mutate(clsa_maf=as.numeric(clsa_maf), clsa_nonmissing_allele_count=as.numeric(clsa_nonmissing_allele_count), eur_af=as.numeric(eur_af))
+
+
+#total5:12:10937478
+clsa_ensembl_total <- left_join(clsa_total, ensembl_total,by=c("chromosome","position", "minor_allele"))%>% 
+  mutate(type = case_when(
+    str_detect(tas2r, "p") ~ "pseudogene",
+    TRUE ~ "true"
+  ))
+
+clsa_ensembl_total <- clsa_ensembl_total %>% mutate(clsa_maf=as.numeric(clsa_maf), clsa_nonmissing_allele_count=as.numeric(clsa_nonmissing_allele_count), eur_af=as.numeric(eur_af))
+
+```
+
+## Remove duplicated records
+
+Remove indels
+
+```{r}
+clsa_ensembl_total <- clsa_ensembl_total %>% mutate(clsa_maf=as.numeric(clsa_maf), clsa_nonmissing_allele_count=as.numeric(clsa_nonmissing_allele_count)) %>% filter(nchar(major_allele) == 1 & nchar(minor_allele)==1)
+
+clsa_total <- clsa_total %>% filter(nchar(major_allele) == 1 & nchar(minor_allele)==1)
+```
+
+Remove duplicated records
+
+```{r}
+
+    #include symbols: 1.proline rich protein HaeIII subfamily 2 (prh2, 5610 nt), 2.small integral membrane protein 10 like 1  (smim10l1, 4823 nt), 3. single stranded DNA binding protein 1 (ssbp1, 12168 nt)
+
+filtered_total <- clsa_ensembl_total %>%
+  filter(symbol!= "epha1-as1" & symbol!="mgam" & symbol!= "prh1" | type=="pseudogene") %>% #exclude epha1-as1 (EPHA1 antisense RNA 1 ,115,637 nt), mgam (maltase-glucoamylase, 120,230 nt), prh1 (290,647 nt)
+  filter(feature!= "enst00000514078.1" & feature!= "enst00000506620.1") %>%  #exclud tas2r1 noncoding types 
+  mutate(consequence=case_when(type=="pseudogene" & symbol=="-" ~ "-", 
+                               TRUE ~ consequence)) %>% 
+  filter(!str_detect(consequence, "intron_variant") | type=="pseudogene") %>% select(-feature, -feature_type, -biotype, -exon, -intron, -hgv_sp, -hgv_sc, -ref_allele, -uploaded_allele, -symbol_source, -hgnc_id, -flags, -mane_select, -mane_plus_clinical, -tsl, -appris, -somatic, -pheno, -pubmed, -motif_name, -motif_pos, -transcription_factors, -motif_score_change, -high_inf_pos, -gene, -location) %>% distinct() 
+
+ write.csv(filtered_total, "filtered_total_for_manual_eddition.csv")
+
+```
+
+Manually removed the rest, upload to draw functional plots
+
+```{r}
+consequence_filtered_total <- read_excel("manually_edited_cons_total.xlsx", sheet = "filtered") %>% 
+  mutate(clsa_minor_allele_count=clsa_maf*clsa_nonmissing_allele_count) %>% select(tas2r, consequence, clsa_minor_allele_count) %>% 
+  group_by(consequence) %>% summarize(count=sum(clsa_minor_allele_count)) %>% filter(consequence!="-") 
+
+consequence_filtered_total <- consequence_filtered_total %>%
+  mutate(consequence = str_replace_all(consequence, "missense_variant", "Missense") %>%
+         str_replace_all("synonymous_variant", "Synonymous") %>%
+         str_replace_all("3_prime_utr_variant", "3 prime UTR") %>%
+         str_replace_all("stop_gained", "Stop-gained") %>%
+         str_replace_all("downstream_gene_variant", "Downstream gene") %>%
+         str_replace_all("upstream_gene_variant", "Upstream gene") %>%
+         str_replace_all("5_prime_utr_variant", "5 prime UTR") %>% 
+           str_replace_all("start_lost", "Start-lost") %>% 
+           str_replace_all("stop_lost", "Stop-lost")) 
+
+consequence_filtered_total$consequence <- factor(consequence_filtered_total$consequence, levels = consequence_filtered_total$consequence[order(consequence_filtered_total$count)])
+
+
+plot <- ggplot(consequence_filtered_total, aes(x = consequence)) +
+  geom_point(aes(y = count), size = 2, shape = 19) +  
+  labs(x = "Consequence", y = "Count") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+scale_y_continuous(limits = c(0, 400000), breaks = seq(from = 0, to = 400000, by = 100000))
+
+
+ggsave("~/Mojan_data/Genomics3_clsa/Genetics_scripts/cons_total_plot.tiff", 
+       plot, height = 8.75, width = 11, units = 'in', dpi = 120)
+
+```
+
+detect snps without available 1kgp european maf on ensembl, manual search
+
+```{r}
+#no_ensembl_euro_maf <- clsa_european %>% anti_join(filtered_european, by = c("chromosome", "major_allele", "minor_allele", "position"))
+
+#write.csv(no_ensembl_euro_maf, "manual_search_eur.csv")
+manual_search <- read_ods("manual_search_eur.ods")%>% filter(nchar(major_allele) == 1 & nchar(minor_allele)==1) %>% select(position, chromosome, minor_allele, eur_af)
+```
+
+Remove indels
+
+```{r}
+clsa_ensembl_european <- clsa_ensembl_european %>% mutate(clsa_maf=as.numeric(clsa_maf), clsa_nonmissing_allele_count=as.numeric(clsa_nonmissing_allele_count)) %>% filter(nchar(major_allele) == 1 & nchar(minor_allele)==1)
+
+clsa_european <- clsa_european %>% filter(nchar(major_allele) == 1 & nchar(minor_allele)==1)
+```
+
+Remove duplicated records
+
+```{r}
+#Merge with manual search
+
+
+merged_clsa_ensembl_european <- rbind(clsa_ensembl_european,
+                                      full_join(clsa_ensembl_european %>%  filter(is.na(eur_af) | eur_af=="-") %>% select(-eur_af),
+                           manual_search, by= c("position", "chromosome", "minor_allele")))
+#filter european
+  filtered_european <- merged_clsa_ensembl_european %>%
+  filter(!is.na(eur_af) & eur_af!="-") %>% select(snp, existing_variation, tas2r, type, chromosome, position,location, minor_allele, major_allele,uploaded_allele, ref_allele, clsa_maf, clsa_nonmissing_allele_count, eur_af) %>%
+  mutate(across(c(clsa_maf, clsa_nonmissing_allele_count, eur_af), as.numeric))
+  
+#sift, poly_phen, loeuf, cadd_phred, cadd_raw, consequence, symbol
+#remove_duplicates
+filtered_european <- distinct(filtered_european)
+
+duplicates <- filtered_european[duplicated(filtered_european[, c("chromosome", "position", "minor_allele")]) | 
+                         duplicated(filtered_european[, c("chromosome", "position", "minor_allele")], fromLast = TRUE), ] 
+
+#write the list of unique snps to a file, to extract independent snps from plink
+
+write.table(data.frame(filtered_european$chromosome, filtered_european$position, filtered_european$position, filtered_european$tas2r), "list_eur_snps_to_extract_independent_snps_with_link.txt", quote = F, row.names = F, col.names = F)
+```
+
+## CLSA 1KGP comparison
+
+Chi-squared test
+
+```{r}
+
+filtered_european <- filtered_european %>%
+  mutate(clsa_minor_allele_count = clsa_maf * clsa_nonmissing_allele_count,
+         genomes_minor_allele_count= eur_af *2012,
+         clsa_major_allele_count= clsa_nonmissing_allele_count - clsa_minor_allele_count,
+         genomes_major_allele_count = 2012 - genomes_minor_allele_count)
+
+# Perform chi-squared test
+filtered_european <- filtered_european %>%
+  rowwise() %>%
+  mutate(p_value = {
+    contingency_table <- matrix(c(clsa_minor_allele_count, clsa_major_allele_count, genomes_minor_allele_count, genomes_major_allele_count), nrow = 2, byrow = TRUE)
+    chisq.test(contingency_table)$p.value * 35
+  })
+##summary table of snps with significantly different mafs
+
+write_csv(filtered_european %>% filter(p_value<0.05), "~/Mojan_data/Genetics/Genomics3_clsa/Genetics_scripts/sig_eur_difference.csv")
+
+```
+
+Order based on mafs
+
+```{r}
+#Add rs ids manually 
+
+#filtered_european <- filtered_european %>%  mutate(existing_variation = strsplit(existing_variation, ",") %>% sapply(`[[`, 1)) 
+#write_ods(filtered_european, "filtered_european.ods")
+
+filtered_european <- left_join(filtered_european, read_ods("filtered_european.ods"), by= c("chromosome", "position", "minor_allele"))
+
+filtered_european <- filtered_european %>%
+  mutate(id = paste(toupper(tas2r), rs_id,  sep = " ")) %>%
+    arrange(clsa_maf) 
+```
+
+#Remove duplicates
+
+```{r}
+#sift, poly_phen, loeuf, cadd_phred, cadd_raw, consequence, symbol
+
+cons_european <- left_join(filtered_european, select(clsa_ensembl_european, snp, symbol, position, minor_allele, major_allele, chromosome, consequence, impact, feature, protein_position, amino_acids, sift, poly_phen, strand), by=c("snp", "chromosome", "position", "minor_allele", "major_allele")) %>% select(-existing_variation, -uploaded_allele, -ref_allele) %>% distinct() %>% select(snp, tas2r, symbol, consequence, everything()) %>% mutate(reference_allele = str_split(snp, ":", simplify = TRUE)[, 3])
+
+#include symbols: 1.proline rich protein HaeIII subfamily 2 (prh2, 5610 nt), 2.small integral membrane protein 10 like 1  (smim10l1, 4823 nt), 3. single stranded DNA binding protein 1 (ssbp1, 12168 nt)
+
+cons_european <- cons_european %>%
+  filter(symbol!= "epha1-as1" & symbol!="mgam" & symbol!= "prh1" | type=="pseudogene") %>% #exclude epha1-as1 (EPHA1 antisense RNA 1 ,115,637 nt), mgam (maltase-glucoamylase, 120,230 nt), prh1 (290,647 nt)
+  filter(feature!= "enst00000514078.1" & feature!= "enst00000506620.1") %>%  #exclud tas2r1 noncoding types 
+  mutate(consequence=case_when(type=="pseudogene" & symbol=="-" ~ "-", 
+                               TRUE ~ consequence)) 
+#%>% filter(type=="pseudogene" | consequence=="intron_variant" & symbol=="-") #after looking at excel 
+
+#Remove redundant columns and order columns
+cons_european <- cons_european %>% select(-id,-clsa_minor_allele_count, -clsa_major_allele_count, -genomes_minor_allele_count, -genomes_major_allele_count, -feature, -location) %>%  distinct()
+
+
+ref_not_equal_to_major_allele <- clsa_ensembl_european %>% select(snp, ref_allele, major_allele, minor_allele, clsa_maf, eur_af) %>% mutate(reference_allele = str_split(snp, ":", simplify = TRUE)[, 3]) %>% filter(reference_allele!=major_allele) %>% distinct()
+
+#write.csv(cons_european, "cons_european.csv")
+```
+
+## Scatter plots with added consequences
+
+```{r}
+consequence_filtered_european <- read_excel("manually_edited_cons_european.xlsx", sheet = "most_severe_filtered")  %>%
+    arrange(clsa_maf) %>% mutate(type=case_when(str_detect(tas2r, "p")~ "pseudogene", TRUE ~ "true")) %>% 
+  mutate(consequence = str_replace_all(consequence, "missense_variant", "Missense"),
+         consequence= str_replace_all(consequence, "synonymous_variant", "Synonymous"),
+         consequence= str_replace_all(consequence, "3_prime_utr_variant", "3 prime UTR"),
+         consequence= str_replace_all(consequence, "stop_gained", "Stop-gained"),
+         consequence= str_replace_all(consequence, "downstream_gene_variant", "Downstream gene"),
+         consequence= str_replace_all(consequence, "upstream_gene_variant", "Upstream gene"),
+         consequence= str_replace_all(consequence, "-", "NA"),
+         consequence= str_replace_all(consequence, "5_prime_utr_variant", "5 prime UTR"))%>%
+  mutate(id = paste(toupper(tas2r)," (",rs_id,") ",consequence,  sep = ""))
+
+consequence_filtered_european$id <- factor(consequence_filtered_european$id, levels = consequence_filtered_european$id[order(consequence_filtered_european$clsa_maf)])
+
+
+
+#the same plot for true genes
+plot <- ggplot(consequence_filtered_european %>% filter(type=="true"), aes(x = id)) +
+  geom_point(aes(y = eur_af, color = "eur_af"), size = 5, shape = 19) +
+  geom_point(aes(y = clsa_maf, color = "clsa_maf"), size = 5, shape = 19) +
+  scale_color_brewer(palette = "Set1", labels = c("CLSA", "1KGP")) +  # Using Set1 color palette
+  geom_segment(data = consequence_filtered_european%>% filter(type=="true" & p_value < 0.05),
+               aes(x = id, y = eur_af, xend = id, yend = clsa_maf), size=0.3, color = "black") +
+  geom_text(data = consequence_filtered_european %>% filter(type == "true" & p_value < 0.05),
+            aes(x = id, label = sprintf("p=%.2e", p_value), y = (eur_af + clsa_maf) / 2),
+            hjust = -0.53, vjust = 0.5, size = 7, angle = 90) + 
+  labs(x = "Single Nucleotide Variants", y = "Minor Allele Frequency", color = "Databases") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), text = element_text(size = 30)) +
+  scale_y_continuous(limits = c(0, 0.6), breaks = seq(0.1, 0.6, by = 0.1))
+
+plot <- plot +
+  geom_point(data = consequence_filtered_european %>% filter(type=="true" & p_value < 0.05), aes(y = clsa_maf), color = "black", size = 5, shape = 1) +
+  geom_point(data = consequence_filtered_european %>% filter(type=="true" & p_value < 0.05), aes(y = eur_af), color = "black", size = 5, shape = 1)
+
+
+ggsave("~/Mojan_data/Genomics3_clsa/scatter_plots/clsa_vs_1kgp_true_cons.tiff", 
+       plot, height = 18*0.75, width = 30, units = 'in', dpi = 120)
+
+#the same plot for pseudogenes
+plot <- ggplot(consequence_filtered_european %>% filter(type=="pseudogene"), aes(x = id)) +
+  geom_point(aes(y = eur_af, color = "eur_af"), size = 5, shape = 19) +
+  geom_point(aes(y = clsa_maf, color = "clsa_maf"), size = 5, shape = 19) +
+  scale_color_brewer(palette = "Set1", labels = c("CLSA", "1KGP")) +
+  geom_segment(data = consequence_filtered_european%>% filter(type=="pseudogene" & p_value < 0.05),
+               aes(x = id, y = eur_af, xend = id, yend = clsa_maf), size=0.3, color = "black") +
+  geom_text(data = consequence_filtered_european %>% filter(type == "pseudogene" & p_value < 0.05),
+            aes(x = id, label = sprintf("p=%.2e", p_value), y = (eur_af + clsa_maf) / 2),
+            hjust = -0.53, vjust = 0.5, size = 5.5, angle = 90) + 
+  labs(x = "Single Nucleotide Variants", y = "Minor Allele Frequency", color = "Databases") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), text = element_text(size = 20))+
+   scale_y_continuous(limits = c(0, 0.6), breaks = seq(0.1, 0.6, by = 0.1))
+
+  plot <- plot +
+  geom_point(data = consequence_filtered_european %>% filter(type=="pseudogene" & p_value < 0.05), aes(y = clsa_maf), color = "black", size = 5, shape = 1) +
+  geom_point(data = consequence_filtered_european %>% filter(type=="pseudogene" & p_value < 0.05), aes(y = eur_af), color = "black", size = 5, shape = 1)
+
+ggsave("~/Mojan_data/Genomics3_clsa/scatter_plots/clsa_vs_1kgp_pseudogene_cons.tiff", 
+       plot, height = 15*0.75, width = 15, units = 'in', dpi = 120)
+
+
+```
+
+plot for missense and nonmissense in TAS2R genes
+
+```{r}
+#the same plot for true genes-missense
+plot <- ggplot(consequence_filtered_european %>% filter(type=="true" & consequence=="Missense"), aes(x = id)) +
+  geom_point(aes(y = eur_af, color = "eur_af"), size = 5, shape = 19) +
+  geom_point(aes(y = clsa_maf, color = "clsa_maf"), size = 5, shape = 19) +
+  scale_color_brewer(palette = "Set1", labels = c("CLSA", "1KGP")) +  # Using Set1 color palette
+  geom_segment(data = consequence_filtered_european%>% filter(type=="true" & p_value < 0.05 & consequence=="Missense"),
+               aes(x = id, y = eur_af, xend = id, yend = clsa_maf), size=0.3, color = "black") +
+  geom_text(data = consequence_filtered_european %>% filter(type == "true" & p_value < 0.05 & consequence=="Missense"),
+            aes(x = id, label = sprintf("p=%.2e", p_value), y = (eur_af + clsa_maf) / 2),
+            hjust = -0.53, vjust = 0.5, size = 7, angle = 90) + 
+  labs(x = "Single Nucleotide Variants", y = "Minor Allele Frequency", color = "Databases") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), text = element_text(size = 30)) +
+  scale_y_continuous(limits = c(0, 0.6), breaks = seq(0.1, 0.6, by = 0.1))
+
+plot <- plot +
+  geom_point(data = consequence_filtered_european %>% filter(type=="true" & p_value < 0.05& consequence=="Missense"), aes(y = clsa_maf), color = "black", size = 5, shape = 1) +
+  geom_point(data = consequence_filtered_european %>% filter(type=="true" & p_value < 0.05& consequence=="Missense"), aes(y = eur_af), color = "black", size = 5, shape = 1)
+
+
+ggsave("~/Mojan_data/Genomics3_clsa/scatter_plots/clsa_vs_1kgp_true_missense.tiff", 
+       plot, height = 18*0.75, width = 30, units = 'in', dpi = 120)
+
+
+
+#the same plot for true genes-nonmissense
+plot <- ggplot(consequence_filtered_european %>% filter(type=="true" & consequence!="Missense"), aes(x = id)) +
+  geom_point(aes(y = eur_af, color = "eur_af"), size = 5, shape = 19) +
+  geom_point(aes(y = clsa_maf, color = "clsa_maf"), size = 5, shape = 19) +
+  scale_color_brewer(palette = "Set1", labels = c("CLSA", "1KGP")) +  # Using Set1 color palette
+  geom_segment(data = consequence_filtered_european%>% filter(type=="true" & p_value < 0.05 & consequence!="Missense"),
+               aes(x = id, y = eur_af, xend = id, yend = clsa_maf), size=0.3, color = "black") +
+  geom_text(data = consequence_filtered_european %>% filter(type == "true" & p_value < 0.05 & consequence!="Missense"),
+            aes(x = id, label = sprintf("p=%.2e", p_value), y = (eur_af + clsa_maf) / 2),
+            hjust = -0.53, vjust = 0.5, size = 7, angle = 90) + 
+  labs(x = "Single Nucleotide Variants", y = "Minor Allele Frequency", color = "Databases") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), text = element_text(size = 30)) +
+  scale_y_continuous(limits = c(0, 0.6), breaks = seq(0.1, 0.6, by = 0.1))
+
+plot <- plot +
+  geom_point(data = consequence_filtered_european %>% filter(type=="true" & p_value < 0.05& consequence!="Missense"), aes(y = clsa_maf), color = "black", size = 5, shape = 1) +
+  geom_point(data = consequence_filtered_european %>% filter(type=="true" & p_value < 0.05& consequence!="Missense"), aes(y = eur_af), color = "black", size = 5, shape = 1)
+
+
+ggsave("~/Mojan_data/Genomics3_clsa/scatter_plots/clsa_vs_1kgp_true_nonmissense.tiff", 
+       plot, height = 18*0.75, width = 30, units = 'in', dpi = 120)
+```
+
+Plot showing variants with different mafs
+
+```{r}
+
+plot <- ggplot(consequence_filtered_european %>% filter(p_value < 0.05), aes(x = id)) +
+  geom_point(aes(y = eur_af, color = "eur_af"), size = 2, shape = 19) +
+  geom_point(aes(y = clsa_maf, color = "clsa_maf"), size = 2, shape = 19) +
+  scale_color_brewer(palette = "Set1", labels = c("CLSA", "1KGP")) +  # Using Set1 color palette
+  geom_segment(data = consequence_filtered_european%>% filter (p_value < 0.05),
+               aes(x = id, y = eur_af, xend = id, yend = clsa_maf), size=0.3, color = "black") +
+  labs(x = "Single Nucleotide Variants", y = "Minor Allele Frequency", color = "Databases") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) 
+
+plot <- plot +
+  geom_point(data = consequence_filtered_european %>% filter(p_value < 0.05), aes(y = clsa_maf), color = "black", size = 2, shape = 1) +
+  geom_point(data = consequence_filtered_european %>% filter(p_value < 0.05), aes(y = eur_af), color = "black", size = 2, shape = 1)
+
+
+ggsave("~/Mojan_data/Genomics3_clsa/Genetics_scripts/dif_clsa_vs_1kgp_cons.tiff", 
+       plot, height = 8*0.75, width = 11, units = 'in', dpi = 120)
+
+```
