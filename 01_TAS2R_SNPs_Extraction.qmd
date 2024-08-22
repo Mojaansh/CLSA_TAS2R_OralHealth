@@ -70,7 +70,23 @@ Filter imputation files based on quality score
 
 ```{bash}
 DATA=/home/mojan/Mojan_data/Genetics/Genomics3_clsa
-IMP=$DATA/imp.new
+IMP=$DATA/imp.newOUT=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output
+
+#extract list of unique tas2r snps in european population with available 1000 Genomes european allele frequency, produced by R
+plink --bfile $OUT/clsa_imp_v3_european_sm_qc_maf_0.01 --extract $OUT/independent_markers/list_eur_snps_to_extract_independent_snps.txt range --make-bed --out $OUT/independent_markers/snps_with_1kgp_af_european_sm_qc_maf0.01
+
+
+#independent markers
+
+plink --bfile $OUT/independent_markers/snps_with_1kgp_af_european_sm_qc_maf0.01 --indep-pairwise 1000 kb 5 0.1 --out $OUT/independent_markers/independent_snps_with_1kgp_af_european_sm_qc_maf0.01
+
+#independent markers in n=124 snps
+plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --indep-pairwise 1000 kb 5 0.1 --out $OUT/independent_markers/independent_snps_t2r_european_sm_qc_maf0.01
+
+
+#calculate r-squared for linkage disequilibrium between the SNPs n=124
+
+plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --r2 --ld-window 99999 --ld-window-kb 1000 --ld-window-r2 0.2 --out $OUT/independent_markers/r_squared
 #to remove low quality imputation SNPs:
 #zcat to unzip the imputation files
 #filter for markers with quality (Rsq) > 0.8 for both batches (column 5 and 7)
@@ -160,6 +176,50 @@ plink --bfile $IMP/clsa_imp_merged_v3 --keep $IMP/01_european_hq_sample.txt\
       --make-bed --out $OUT/clsa_imp_v3_european_sm_qc_maf_0.01
 
  
+```
+
+## Extract TAS2R SNPs in European population
+
+```{bash}
+OUT=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output
+
+#Extract TAS2R SNPs from imp files
+
+#plink --bfile $OUT/clsa_imp_v3_european_sm_qc_maf_0.01 --extract $OUT/loc38.txt range --make-bed --out $OUT/t2r_european_sm_qc_maf0.01
+
+#calculate minor allele frequencies
+#plink --bfile $OUT/t2r_european_sm_qc_maf0.01 --freq --out $OUT/frq_t2r_european_sm_qc_maf0.01
+
+
+#Extract SNPs only (indels were removed using R)
+
+plink --bfile $OUT/clsa_imp_v3_european_sm_qc_maf_0.01 --extract $OUT/snp_euro.txt range --make-bed --out $OUT/snp_t2r_european_sm_qc_maf0.01
+
+plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --update-sex $OUT/oral_health/update_sex.txt --make-bed --out $OUT/snp_t2r_european_sm_qc_maf0.01_updated_sex
+
+```
+
+## Independent markers count
+
+```{bash}
+
+OUT=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output
+conda activate mojan_plink
+#extract list of unique tas2r snps in european population with available 1000 Genomes european allele frequency, produced by R
+plink --bfile $OUT/clsa_imp_v3_european_sm_qc_maf_0.01 --extract $OUT/independent_markers/list_eur_snps_to_extract_independent_snps.txt range --make-bed --out $OUT/independent_markers/snps_with_1kgp_af_european_sm_qc_maf0.01
+
+
+#independent markers
+
+plink --bfile $OUT/independent_markers/snps_with_1kgp_af_european_sm_qc_maf0.01 --indep-pairwise 1000 kb 5 0.1 --out $OUT/independent_markers/independent_snps_with_1kgp_af_european_sm_qc_maf0.01
+
+#independent markers in n=124 snps
+plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --indep-pairwise 1000 kb 5 0.1 --out $OUT/independent_markers/independent_snps_t2r_european_sm_qc_maf0.01
+
+
+#calculate r-squared for linkage disequilibrium between the SNPs n=124
+
+plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --r2 --ld-window 99999 --ld-window-kb 1000 --ld-window-r2 0.2 --out $OUT/independent_markers/r_squared
 ```
 
 ## Add gene names
