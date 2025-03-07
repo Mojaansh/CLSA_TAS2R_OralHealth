@@ -1,7 +1,7 @@
 ---
 title: "PRS"
 format: html
-editor: visual
+editor: visual 
 ---
 
 ## First approach: Base=GWAS results from UKB, Target=CLSA European population
@@ -11,18 +11,18 @@ Create base data for the target phenotypes from ukb GWAS data
 Extract tas2r SNPs
 
 ```{r}
-ukb_sore_gums <- read.table("/home/mojan/Mojan_data/uk_biobank/6149_2.gwas.imputed_v3.both_sexes.tsv", header = T)
-ukb_bleeding_gums <- read.table("/home/mojan/Mojan_data/uk_biobank/6149_3.gwas.imputed_v3.both_sexes.tsv", header = T)
-ukb_loose_teeth <- read.table("/home/mojan/Mojan_data/uk_biobank/6149_4.gwas.imputed_v3.both_sexes.tsv", header = T)
-ukb_toothache <- read.table("/home/mojan/Mojan_data/uk_biobank/6149_5.gwas.imputed_v3.both_sexes.tsv", header = T)
+ukb_sore_gums <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/prs/uk_biobank/6149_2.gwas.imputed_v3.both_sexes.tsv", header = T)
+ukb_bleeding_gums <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/prs/uk_biobank/6149_3.gwas.imputed_v3.both_sexes.tsv", header = T)
+ukb_loose_teeth <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/prs/uk_biobank/6149_4.gwas.imputed_v3.both_sexes.tsv", header = T)
+ukb_toothache <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/prs/uk_biobank/6149_5.gwas.imputed_v3.both_sexes.tsv", header = T)
 ```
 
 Merge clsa snp euro with ukb snp variation file (ukb based on GRCH37, so cannot merge with the other files with position information, only with the rsid)
 
 ```{r}
-ukb_variants <- read.table("/home/mojan/Mojan_data/uk_biobank/variants.tsv", header = T)
+ukb_variants <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/prs/uk_biobank/variants.tsv", header = T)
 
-snp_euro <- read_excel("~/Mojan_data/Genetics/Genomics3_clsa/results/snp_euro.xlsx", sheet="snp_euro") %>% clean_names() %>% 
+snp_euro <- read_excel("snp_euro_oral.xlsx", sheet="snp_euro_oral") %>% clean_names() %>% 
   rename(rsid=rs_id)
 t2r_ukb <- inner_join(ukb_variants, snp_euro, by="rsid")
 t2r_ukb <- t2r_ukb %>% mutate(minor_allele.y=toupper(minor_allele.y)) 
@@ -36,20 +36,27 @@ t2r_clsa_ukb <- t2r_clsa_ukb %>%
   # Combine the columns back into the SNP column
   unite("SNP", chr, pos, ref, alt, sep = ":") 
 
+t2r_clsa_ukb <- t2r_clsa_ukb %>% rename(rsid=rs_id)
 
-ukb_sore_gums <- inner_join(ukb_sore_gums, t2r_clsa_ukb, by="rs_id")
-ukb_bleeding_gums <- inner_join(ukb_bleeding_gums, t2r_clsa_ukb, by="rs_id") 
-ukb_loose_teeth <- inner_join(ukb_loose_teeth, t2r_clsa_ukb, by="rs_id")
-ukb_toothache <- inner_join(ukb_toothache, t2r_clsa_ukb, by="rs_id") 
+sore_gums <- inner_join(ukb_sore_gums, ukb_variants %>% select(variant, rsid), by="variant")
+bleeding_gums <- inner_join(ukb_bleeding_gums, ukb_variants %>% select(variant, rsid), by="variant")
+loose_teeth <- inner_join(ukb_loose_teeth, ukb_variants %>% select(variant, rsid), by="variant")
+toothache <- inner_join(ukb_toothache, ukb_variants %>% select(variant, rsid), by="variant")
+
+
+sore_gums <- inner_join(sore_gums, t2r_clsa_ukb, by="rsid")
+bleeding_gums <- inner_join(bleeding_gums, t2r_clsa_ukb, by="rsid") 
+loose_teeth <- inner_join(loose_teeth, t2r_clsa_ukb, by="rsid")
+toothache <- inner_join(toothache, t2r_clsa_ukb, by="rsid") 
 
 ```
 
 Merge base information with rsid from the variation file
 
 ```{r}
-ukb_sore_gums <- ukb_sore_gums %>% 
-  #mutate(OR = exp(beta)) %>% 
-  #rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
+sore_gums <- sore_gums %>% 
+  mutate(OR = exp(beta)) %>% 
+  rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
   select(SNP, A1, N, SE, P, OR, MAF) %>% separate(SNP, into = c("chr", "pos", "ref", "alt"), sep = ":") %>%
   # Convert the ref and alt columns to uppercase
   mutate(ref = toupper(ref), alt = toupper(alt)) %>%
@@ -57,9 +64,9 @@ ukb_sore_gums <- ukb_sore_gums %>%
   unite("SNP", chr, pos, ref, alt, sep = ":") 
 
 
-ukb_bleeding_gums <- ukb_bleeding_gums %>% 
-  #mutate(OR = exp(beta)) %>% 
-  #rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
+bleeding_gums <- bleeding_gums %>% 
+  mutate(OR = exp(beta)) %>% 
+  rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
   select(SNP, A1, N, SE, P, OR, MAF) %>% 
   separate(SNP, into = c("chr", "pos", "ref", "alt"), sep = ":") %>%
   # Convert the ref and alt columns to uppercase
@@ -67,9 +74,9 @@ ukb_bleeding_gums <- ukb_bleeding_gums %>%
   # Combine the columns back into the SNP column
   unite("SNP", chr, pos, ref, alt, sep = ":") 
 
-ukb_loose_teeth <- ukb_loose_teeth %>% 
-  #mutate(OR = exp(beta)) %>% 
-  #rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
+loose_teeth <- loose_teeth %>% 
+  mutate(OR = exp(beta)) %>% 
+  rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
   select(SNP, A1, N, SE, P, OR, MAF) %>% 
   separate(SNP, into = c("chr", "pos", "ref", "alt"), sep = ":") %>%
   # Convert the ref and alt columns to uppercase
@@ -78,9 +85,9 @@ ukb_loose_teeth <- ukb_loose_teeth %>%
   unite("SNP", chr, pos, ref, alt, sep = ":") 
 
 
-ukb_toothache <- ukb_toothache %>% 
-  #mutate(OR = exp(beta)) %>% 
-  #rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
+toothache <- toothache %>% 
+  mutate(OR = exp(beta)) %>% 
+  rename(N=n_complete_samples, SE=se, MAF=minor_AF, P=pval, A1=minor_allele, rs_id=rsid) %>% 
   select(SNP, A1, N, SE, P, OR, MAF) %>% 
   separate(SNP, into = c("chr", "pos", "ref", "alt"), sep = ":") %>%
   # Convert the ref and alt columns to uppercase
@@ -92,10 +99,10 @@ ukb_toothache <- ukb_toothache %>%
 Create base data file for the four phenotypes
 
 ```{r}
-write.table(ukb_bleeding_gums, "~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_bleeding_gums.txt", row.names = FALSE, quote = FALSE, sep = "\t")
-write.table(ukb_sore_gums, "~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_sore_gums.txt", row.names = FALSE, quote = FALSE, sep = "\t")
-write.table(ukb_loose_teeth, "~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_loose_teeth.txt", row.names = FALSE, quote = FALSE, sep = "\t")
-write.table(ukb_toothache, "~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_toothache.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(bleeding_gums, "~/Mojan_data/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_bleeding_gums.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(sore_gums, "~/Mojan_data/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_sore_gums.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(loose_teeth, "~/Mojan_data/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_loose_teeth.txt", row.names = FALSE, quote = FALSE, sep = "\t")
+write.table(toothache, "~/Mojan_data/Genomics3_clsa/output/oral_health/prs/base_ukb/ukb_toothache.txt", row.names = FALSE, quote = FALSE, sep = "\t")
 
 
 ```
@@ -107,7 +114,7 @@ DATA=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/prs
 OUT=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output
 
 
-#1. create target data (binary files of 1/3 population)
+#1. create target data (binary files of the eruopean population)
 plink --bfile $DATA/snp_t2r_european_sm_qc_maf0.01_updated_sex --keep $DATA/oral_prs_target_population.txt\
       --maf 0.01 --geno 0.05 --hwe 0.000000000315 --mind 0.05 \
       --make-bed --out $DATA/snp_t2r_european_sm_qc_maf0.01_updated_sex_target

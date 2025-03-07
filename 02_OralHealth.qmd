@@ -1,7 +1,7 @@
 ---
 title: "OralHealth"
 format: html
-editor: visual
+editor: visual  
 ---
 
 ## Data preparation
@@ -48,14 +48,14 @@ oral_health <- bl_com %>%rename(gwas_id= ADM_GWAS3_COM, sex = SEX_ASK_COM, age =
 
 ```{r}
 #Manually changed the names to lables
-oral_health <- read.csv("oral_health.csv") %>% clean_names()
+oral_health <- read.csv("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/oral_health.csv") %>% clean_names()
 #european_id <- european_id %>%   rename(FID=fid, IID=iid) 
 
 
 #add case-defined variables
 oral_health <- oral_health %>%  mutate(periodontal_diseases=case_when(bleeding_gums_around_natural_teeth==1|loose_natural_tooth==1 ~ 1, TRUE ~0)) %>% 
   rename(FID=fid, IID=iid) 
-european_id <- european_id %>%  rename(FID=fid, IID=iid) 
+#european_id <- qc_sample_euro %>%  select(FID, IID) 
 
 
 #include european ancestry
@@ -101,7 +101,26 @@ oral_health_european <- oral_health_european %>%
     sore_gums_around_natural_teeth == 1 |
     bleeding_gums_around_natural_teeth == 1
   ))) %>% select(-avoided_eating_in_last_12_months, -general_oral_health, -uncomfortable_eating_in_last_12_months)
-write.table(oral_health_binary_euro,"oral_health_binary_euro.txt", quote = FALSE, row.names = FALSE,
+
+```
+
+Dental variables
+
+```{r}
+#set variables as NA if the patient is toothless
+tooth_variables <- c("toothache",
+  "decayed_natural_tooth",
+  "loose_natural_tooth",
+  "broken_natural_tooth",
+  "sore_gums_around_natural_teeth",
+  "bleeding_gums_around_natural_teeth",
+  "periodontal_diseases",
+  "dental_problems")
+oral_health_binary_euro <- oral_health_binary_euro %>%
+  mutate(across(all_of(tooth_variables), 
+                ~ ifelse(edentulism == 2, NA, .)))
+
+write.table(oral_health_binary_euro,"/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/oral_health_binary_euro.txt", quote = FALSE, row.names = FALSE,
             sep = "\t")
 
 ```
@@ -112,7 +131,7 @@ Create phenotype for for noneuropean for plink not changed for the variable name
 
 #include noneuropean ancestry
 #noneuropean_id <- noneuropean_id %>% rename(FID=fid, IID=iid)
-oral_health_noneuropean <- left_join(noneuropean_id, oral_health, by=c("FID", "IID")) %>% select(-x, -sex, -age)
+oral_health_noneuropean <- left_join(noneuropean_id %>% rename(FID="fid"), oral_health, by=c("FID")) %>% select(-x, -sex, -age, -iid)
 
 #modify scale, affected=2, unaffected=1, except for has_one_or_more_of_original_tooth
 oral_health_binary_noneuro <- oral_health_noneuropean %>%  select(-general_oral_health, -has_one_or_more_of_original_teeth, -uncomfortable_eating_in_last_12_months, -avoided_eating_in_last_12_months, -frequency_brushing_teeth_and_or_dentures, -frequency_brushing_teeth_and_or_dentures_unit_of_measure, -ohp_other_specify_01, -ohp_other_specify_02, -ohp_other_specify_03, -ohp_other_specify_04, -ohp_other_specify_05) %>% mutate_all(.funs = list(~ifelse(. == 1, 2, ifelse(. == 0, 1, .)))) 
@@ -128,20 +147,18 @@ oral_health_binary_noneuro$edentulism[oral_health_binary_noneuro$edentulism == 8
 
 
 #Remove individuals with edentulism + reported at least one problem related to tooth
-oral_health_binary_noneuro <- oral_health_binary_noneuro %>%
-  filter(!(edentulism == 2 & (
-    toothache == 2 |
-   decayed_natural_tooth == 2 |
-    loose_natural_tooth == 2 |
-    broken_natural_tooth == 2 |
-    sore_gums_around_natural_teeth == 2 |
-    bleeding_gums_around_natural_teeth == 2
-  )))
+#oral_health_binary_noneuro <- oral_health_binary_noneuro %>%
+ # filter(!(edentulism == 2 & (
+  #  toothache == 2 |
+   #decayed_natural_tooth == 2 |
+    #loose_natural_tooth == 2 |
+    #broken_natural_tooth == 2 |
+    #sore_gums_around_natural_teeth == 2 |
+    #bleeding_gums_around_natural_teeth == 2
+#  )))
 
-oral_health_binary_euro <- inner_join(oral_health_binary_euro, oral_prevalence %>% select(IID, Sex, Age, Smoking_status, Brushing_frequency), by="IID")
 
-write.table(oral_health_binary_noneuro,"oral_health_binary_noneuro.txt", quote = FALSE, row.names = FALSE,
-            sep = "\t")
+write.table(oral_health_binary_noneuro %>% select(FID, IID, sore_jaw_muscles),"/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/sore_jaw_muscles_noneuro.txt", quote = FALSE, row.names = FALSE, sep = "\t")
 
 ```
 
@@ -149,23 +166,19 @@ write.table(oral_health_binary_noneuro,"oral_health_binary_noneuro.txt", quote =
 
 ```{bash}
 
-OUT=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output
+DATA=/home/mojan/Mojan_data/Genomics3_clsa/output/
 
-#extract list of unique tas2r snps in european population with available 1000 Genomes european allele frequency, produced by R
-plink --bfile $OUT/clsa_imp_v3_european_sm_qc_maf_0.01 --extract $OUT/independent_markers/list_eur_snps_to_extract_independent_snps.txt range --make-bed --out $OUT/independent_markers/snps_with_1kgp_af_european_sm_qc_maf0.01
+#create bed files for the different phenotypes
+#If phenotype file contains multiple phenotypes, use --pheno-name to specify phenotype name to be used
+#--all-pheno for all phenotypes for the final analysis (--assoc)
+
+#association test for oral health phenotypes
+plink --bfile $DATA/snp_t2r_european_sm_qc_maf0.01_updated_sex \
+          --pheno $DATA/oral_health/oral_health_binary_euro.txt \
+          --assoc --ci 0.95 --adjust --all-pheno\
+          --out $DATA/oral_health/univariable_results/gwas
 
 
-#independent markers
-
-plink --bfile $OUT/independent_markers/snps_with_1kgp_af_european_sm_qc_maf0.01 --indep-pairwise 1000 kb 5 0.1 --out $OUT/independent_markers/independent_snps_with_1kgp_af_european_sm_qc_maf0.01
-
-#independent markers in n=124 snps
-plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --indep-pairwise 1000 kb 5 0.1 --out $OUT/independent_markers/independent_snps_t2r_european_sm_qc_maf0.01
-
-
-#calculate r-squared for linkage disequilibrium between the SNPs n=124
-
-plink --bfile $OUT/snp_t2r_european_sm_qc_maf0.01 --r2 --ld-window 99999 --ld-window-kb 1000 --ld-window-r2 0.2 --out $OUT/independent_markers/r_squared
 ```
 
 ## Summarize plink chi-squared outcomes
@@ -203,36 +216,43 @@ phenotypes <- c(
 
 ```{r}
 gwas_outcomes_oral <- list()
-gwas_combined <- read.table("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/univariable_results/gwas.toothache.assoc",header = TRUE) %>% 
-  clean_names %>% select(snp, p) %>% mutate_all(tolower)%>% left_join(., snp_euro %>% select(snp, gene, rsid, consequence), by="snp")
+gwas_combined <- read.table("~/Mojan_data/Genomics3_clsa/output/oral_health/univariable_results/gwas.toothache.assoc",header = TRUE) %>% 
+  clean_names %>% select(snp, p) %>% mutate_all(tolower)%>% left_join(., snp_euro_oral %>% select(snp, gene, rs_id, consequence), by="snp")
 
-gwas_combined_significant <- read.table("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/univariable_results/gwas.toothache.assoc",header = TRUE) %>% 
-  clean_names %>% select(snp, p) %>% mutate_all(tolower) %>% left_join(., snp_euro, by="snp")
+gwas_combined_significant <- read.table("~/Mojan_data/Genomics3_clsa/output/oral_health/univariable_results/gwas.toothache.assoc",header = TRUE) %>% 
+  clean_names %>% select(snp, p) %>% mutate_all(tolower) %>% left_join(., snp_euro_oral, by="snp")
 
 # L0.002088oop through each phenotype
 for (phenotype in phenotypes) {
   # Read the corresponding file
-  file_path <- paste0("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/univariable_results/gwas.", phenotype, ".assoc")
+  file_path <- paste0("~/Mojan_data/Genomics3_clsa/output/oral_health/univariable_results/gwas.", phenotype, ".assoc")
   data <- read.table(file_path, header = TRUE)%>% clean_names() %>%
     mutate_all(tolower) %>% mutate(adjusted_p=as.numeric(p)*35)
   
   # Assign the dataframe to the list with the same name as phenotype
-  gwas_outcomes_oral[[phenotype]] <- left_join(data, snp_euro %>% select(snp, gene, rsid, consequence), by="snp")
+  gwas_outcomes_oral[[phenotype]] <- left_join(data, snp_euro_oral %>% select(snp, gene, rs_id, consequence), by="snp")
   
-    gwas_combined_significant <- left_join(gwas_combined_significant, data %>% filter(adjusted_p<0.05)%>% select(snp, adjusted_p, or) %>% 
-                               rename(!!paste0("adjusted_p_", phenotype) := adjusted_p, !!paste0("or_", phenotype) := or), by="snp")
+    gwas_combined_significant <- left_join(gwas_combined_significant, data %>% filter(adjusted_p<0.06)%>% select(snp, adjusted_p, or, l95, u95) %>% 
+    rename(!!paste0("adjusted_p_", phenotype) := adjusted_p, 
+           !!paste0("or_", phenotype) := or,
+           !!paste0("l95_", phenotype) := l95,
+           !!paste0("u95_", phenotype) := u95),
+    by="snp")
 
   
   gwas_combined <- left_join(gwas_combined, data %>% 
-                               select(snp, adjusted_p, or) %>% 
-                               rename(!!paste0("adjusted_p_", phenotype) := adjusted_p, !!paste0("or_", phenotype) := or), 
-                             by = "snp")
+                               select(snp, adjusted_p, or, l95, u95) %>% 
+    rename(!!paste0("adjusted_p_", phenotype) := adjusted_p, 
+           !!paste0("or_", phenotype) := or,
+           !!paste0("l95_", phenotype) := l95,
+           !!paste0("u95_", phenotype) := u95),
+    by="snp")
   
 }
-gwas_combined_significant <- gwas_combined_significant[rowSums(!is.na(gwas_combined_significant %>% select(-snp, -p, -gene, -rsid, -consequence))) > 0, ]
+gwas_combined_significant <- gwas_combined_significant[rowSums(!is.na(gwas_combined_significant %>% select(-snp, -p, -gene, -rs_id, -consequence))) > 0, ]
 
-
-
+  
+  
 write.csv(gwas_combined, "gwas_combined.csv", col.names = TRUE)
 write.csv(gwas_combined_significant, "gwas_combined_significant.csv", col.names = TRUE)
 ```
@@ -241,14 +261,22 @@ write.csv(gwas_combined_significant, "gwas_combined_significant.csv", col.names 
 
 ```{r}
 
+library(gtsummary)
 #used oral_health_european because also includes categorical variables of multiple categories
 oral_health_european <- left_join(oral_health_european, bl_com %>% rename(IID= ADM_GWAS3_COM, sex = SEX_ASK_COM, age =AGE_NMBR_COM) %>%  select(IID, sex, age), by= "IID") %>% mutate(sex=case_when(sex=="M"~1, sex=="F"~2))
 
 
-oral_health_european %>%  tbl_summary(include = everything(), by=sex, label = list(oral_health_status ~ "General Oral Health"),
+oral_health_european %>%  tbl_summary(include = everything(), by=sex, 
     missing_text = "(Missing)") %>%
  as_gt() %>%
   gt::gtsave(filename = "oral_health_summary.docx") 
+
+#for covariates
+covariates_oral %>%  tbl_summary(include =  c(smoking, age, brushing, education, general_health, household_income), by=sex,
+    missing_text = "(Missing)") %>%
+    add_p() %>% 
+ as_gt() %>%
+  gt::gtsave(filename = "covariates_oral.docx") 
 
 #gt summary for the total european(not by sex)
 oral_health_binary_euro %>%  tbl_summary(include = everything(), 
@@ -261,30 +289,24 @@ oral_health_binary_euro %>%  tbl_summary(include = everything(), by=Sex,
  as_gt() %>%
   gt::gtsave(filename = "oral_health_summary_european_by_sex.docx") 
 
-#gt summary for the total noneuropean
-oral_health_binary_noneuro %>%  tbl_summary(include = everything(),
-    missing_text = "(Missing)") %>%
- as_gt() %>%
-  gt::gtsave(filename = "oral_health_summary_non_european.docx") 
 
 ```
 
-Plot prevalences
+## Calculate the number of independent phenotypes
 
 ```{r}
 
-oral_health_sum <- read.csv("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/oral_health_summary.csv")
-oral_health_sum$Characteristic <- factor(oral_health_sum$Characteristic, levels = unique(oral_health_sum$Characteristic))
-oral_health_long <- gather(oral_health_sum, key = "Gender", value = "Percentage", Males, Females)
+library(psych)
 
-plot <- ggplot(oral_health_long, aes(x = Characteristic, y = Percentage, fill = Gender)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "Prevalence of Oral Health Symptoms", x = "Characteristic", y = "Percentage (%)") +
-  scale_fill_manual(values = c("Males" = "cyan", "Females" = "magenta"))+
-  theme(text = element_text(size = 25))
-ggsave("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/oral_health_sum.tiff", 
-       plot, height = 12*0.75, width = 15, units = 'in', dpi = 120)
+phi_matrix <- tetrachoric(oral_health_binary_euro %>% select(-FID, -IID, -ohp_other, -ohp_no_answer, -ohp_refused, -temporomandibular_pain, -dental_problems) %>% rename(bleeding_gums=bleeding_gums_around_natural_teeth, sore_gums=sore_gums_around_natural_teeth))$rho
+png("correlation_plot.png", width = 15, height = 15, units = "in", res = 450)
+corrplot(phi_matrix, method = "color", type = "lower", 
+         tl.col = "black", tl.srt = 45, 
+         addCoef.col = "black", 
+         tl.cex = 1.7, 
+         number.cex = 0.7, cl.cex = 1.8)
+
+dev.off()
 
 
 ```
@@ -298,21 +320,21 @@ dev.new(width=11, height=4.5)
 for (phenotype in phenotypes) {
 
 # Prepare the data
-gwas_results <- read.table(paste0("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/univariable_results/gwas.", phenotype, ".assoc"), header = TRUE) %>% clean_names() %>% rename(chromosome=chr) %>%
+gwas_results <- read.table(paste0("~/Mojan_data/Genomics3_clsa/output/oral_health/univariable_results/gwas.", phenotype, ".assoc"), header = TRUE) %>% clean_names() %>% rename(chromosome=chr) %>%
   mutate_all(tolower) %>% mutate(p=as.numeric(p)) %>% mutate(chromosome=as.numeric(chromosome)) 
 
 gwas_results <- inner_join(gwas_results, snp_euro, by=c("chromosome", "snp")) 
 
 gwas_results <- gwas_results %>%
   mutate(log_p = -log10(p)) %>% 
-  arrange(as.numeric(chromosome), bp) %>% 
-  mutate(label = paste(snp, tas2r, consequence, sep = "_"))  # create new LABEL column
+  arrange(chromosome, bp) %>% 
+  mutate(label = paste(snp, gene, consequence, sep = "_"))  # create new LABEL column
 
 # Create an ordered factor for GENE based on the order in the arranged dataframe
-gwas_results$tas2r <- factor(gwas_results$tas2r, levels = unique(gwas_results$tas2r)) 
+gwas_results$gene <- factor(gwas_results$gene, levels = unique(gwas_results$gene)) 
 
 # Set a color palette with a large number of colors
-num_colors <- length(unique(gwas_results$tas2r))
+num_colors <- length(unique(gwas_results$gene))
 my_palette <- rainbow(num_colors)
 
 # Shuffle the palette
@@ -320,7 +342,7 @@ set.seed(123)  # for reproducible results
 my_palette <- sample(my_palette)
 
 # Create a scatter plot
-manhattan_plot = ggplot(gwas_results, aes(x = tas2r, y = log_p, color = tas2r)) +
+manhattan_plot = ggplot(gwas_results, aes(x = gene, y = log_p, color = gene)) +
   geom_point(alpha = 0.5, size=3.5) +
   scale_color_manual(values = my_palette) +
   geom_hline(yintercept = 1.3, linetype = "dashed", color = "blue") +
@@ -331,195 +353,237 @@ manhattan_plot = ggplot(gwas_results, aes(x = tas2r, y = log_p, color = tas2r)) 
   labs(title = gsub("_|ohp", " ", phenotype), x = NULL, y = "-log10(p-value)") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), text = element_text(size = 30), plot.title = element_text(size = 30, face = "bold")) +
   guides(color = FALSE) +
-  scale_y_continuous(limits = c(0, 3.2))
+  scale_y_continuous(limits = c(0, 3.5))
 # Save the plot
-ggsave(paste0("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/chi_squared_manhattan_plots/", phenotype, ".png"), plot = manhattan_plot, width = 11, height = 4.5, dpi = 450)
+ggsave(paste0("~/Mojan_data/Genomics3_clsa/output/oral_health/chi_squared_manhattan_plots/", phenotype, ".png"), plot = manhattan_plot, width = 11, height = 4.5, dpi = 450)
 }
 ```
 
 compare males with females
 
 ```{r}
-df <- data.frame(
-  Characteristic = c(
-    "Smoking_status: 1", "Smoking_status: 2", "Smoking_status: 3",
-    "General oral health: Excellent", "General oral health: Very good", "General oral health: Good", 
-    "General oral health: Fair", "General oral health: Poor",
-    "Uncomfortable eating in last 12 months: Often", "Uncomfortable eating in last 12 months: Sometimes", 
-    "Uncomfortable eating in last 12 months: Rarely", "Uncomfortable eating in last 12 months: Never",
-    "Avoided eating in last 12 months: Often", "Avoided eating in last 12 months: Sometimes", 
-    "Avoided eating in last 12 months: Rarely", "Avoided eating in last 12 months: Never",
-    "Edentulism", "Toothache", "Cannot chew adequately", "Swelling in mouth", 
-    "Dry mouth", "Burning mouth", "Jaw muscles sore", "Jaw joints painful", 
-    "Natural tooth decayed", "Natural tooth loose", "Natural tooth broken", 
-    "Gums around natural teeth are sore", "Gums around natural teeth bleed", 
-    "Denture related sores", "Teeth or dentures dirty", "Bad breath", 
-    "Periodontal disease", "None", "Other", "No answer"
-  ),
-  Males = c(
-    859, 5553, 4659, 
-    3414, 4407, 2399, 545, 141,
-    193, 717, 2135, 7857,
-    143, 399, 1031, 9330,
-    629, 1410, 799, 465,
-    1689, 102, 396, 404,
-    1798, 510, 1278, 754, 1094,
-    203, 386, 823, 1508,
-    4754, 365, 4
-  ),
-  Females = c(
-    1013, 4816, 5089, 
-    3958, 4318, 2210, 447, 120,
-    296, 931, 2197, 7631,
-    213, 634, 1313, 8893,
-    686, 1306, 933, 535,
-    2196, 207, 788, 868,
-    1352, 522, 1124, 894, 1315,
-    262, 239, 735, 1700,
-    4618, 444, 16
+
+males <- c(859, 5553, 4659, 3414, 4407, 2399, 545, 141, 193, 717, 2135, 7857, 143, 399, 1031, 9330, 629, 1410, 799, 465, 1689, 102, 396, 404, 1798, 510, 1278, 754, 1094, 203, 386, 823, 4754, 1508, 3298, 610)
+females <- c(1013, 4816, 5089, 3958, 4318, 2210, 447, 120, 296, 931, 2197, 7631, 213, 634, 1313, 8893, 686, 1306, 933, 535, 2196, 207, 788, 868, 1352, 522, 1124, 894, 1315, 262, 239, 735, 4618, 1700, 2831, 1198)
+
+categories <- list(
+  smoking_status = matrix(c(859, 1013, 5553, 4816, 4659, 5089), ncol=2),
+  
+  general_oral_health = matrix(c(
+    3414, 3958, 4407, 4318, 2399, 2210, 545, 447, 141, 120
+  ), ncol=2),
+
+  uncomfortable_eating = matrix(c(
+    193, 296, 717, 931, 2135, 2197, 7857, 7631
+  ), ncol=2),
+  
+
+  avoided_eating = matrix(c(
+    143, 213, 399, 634, 1031, 1313, 9330, 8893
+  ), ncol=2),
+  
+  edentulism = matrix(c(629, 686), ncol=2),
+  toothache = matrix(c(1410, 1306), ncol=2),
+  cannot_chew = matrix(c(799, 933), ncol=2),
+  swelling_in_mouth = matrix(c(465, 535), ncol=2),
+  dry_mouth = matrix(c(1689, 2196), ncol=2),
+  burning_mouth = matrix(c(102, 207), ncol=2),
+  jaw_muscles_sore = matrix(c(396, 788), ncol=2),
+  jaw_joints_painful = matrix(c(404, 868), ncol=2),
+  natural_tooth_decayed = matrix(c(1798, 1352), ncol=2),
+  natural_tooth_loose = matrix(c(510, 522), ncol=2),
+  natural_tooth_broken = matrix(c(1278, 1124), ncol=2),
+  gums_sore = matrix(c(754, 894), ncol=2),
+  gums_bleed = matrix(c(1094, 1315), ncol=2),
+  denture_sores = matrix(c(203, 262), ncol=2),
+  teeth_dentures_dirty = matrix(c(386, 239), ncol=2),
+  bad_breath = matrix(c(823, 735), ncol=2),
+  no_oral_health_problems = matrix(c(4754, 4618), ncol=2),
+  periodontal_disease = matrix(c(1508, 1700), ncol=2),
+  dental_problem = matrix(c(3298, 2831), ncol=2),
+  TMD = matrix(c(610, 1198), ncol=2)
+)
+
+# Perform Chi-square tests
+p_values <- sapply(categories, function(x) {
+  chisq.test(x)$p.value
+})
+
+# Bonferroni correction
+alpha <- 0.05
+bonferroni_alpha <- alpha / length(p_values)
+
+# Adjust p-values (Bonferroni correction)
+p_values_adjusted <- p.adjust(p_values, method = "bonferroni")
+
+# Create a table with original and adjusted p-values
+results_table <- data.frame(
+  Characteristic = names(categories),
+  `p-value` = p_values,
+  `p-value (adjusted)` = p_values_adjusted
+)
+
+
+write.csv(results_table, "summary_compare_sex.csv")
+
+#Age
+hist(covariates_oral$Age, main = "Histogram of Age", xlab = "Age", col = "lightblue", border = "black")
+
+# Q-Q Plot
+qqnorm(covariates_oral$Age)
+qqline(covariates_oral$Age, col = "red")
+
+# Perform two-sample t-test 
+
+age_male <- covariates_oral$Age[covariates_oral$Sex == 1]
+age_female <- covariates_oral$Age[covariates_oral$Sex == 2]
+
+covariates_oral %>% group_by(Sex) %>% summarize(
+     Mean = mean(Age, na.rm = TRUE),
+    SD = sd(Age, na.rm = TRUE)
   )
-)
 
-# Function to compute p-value
-compute_p_value <- function(males, females) {
-  test <- chisq.test(matrix(c(males, females), ncol = 2))
-  return(test$p.value)
-}
-
-# Apply the function to each row and add a new column with p-values
-df <- df %>%
-  rowwise() %>%
-  mutate(p_value = compute_p_value(Males, Females))
-write.csv(df, "~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/summary_compare_sex.csv")
-
-```
-
-compare specific conditions
-
-```{r}
-# Data for the contingency table
-data <- data.frame(
-  Condition = c("Periodontal disease", "Dental problems", "Temporomandibular pain"),
-  Males = c(1508, 3298 , 610),
-  Females = c(1700, 2831 , 1198)
-)
-
-# Calculate p-values using chi-squared test
-p_values <- apply(data[, 2:3], 1, function(x) chisq.test(x)$p.value)
-
-# Add p-values to the table
-data$P_Value <- round(p_values, 6)
-
-# Display the table
-print(data)
+#Mann-Whitney U test (Wilcoxon rank-sum test)
+wilcox.test(age_male, age_female)
 
 ```
 
 ## Create covariate files for plink
 
 ```{r}
-covariates_oral_list <- read_excel("oral health covariates.xlsx")
 #Sex 1=male; 2=female; other=unknown
-covariates_oral <- bl_com %>% select(ADM_GWAS3_COM,AGE_NMBR_COM, SEX_ASK_COM, ICQ_SMOKE_COM, ORH_BRUSH_NB_MCQ, ORH_BRUSH_UNIT_MCQ) %>%
-  rename(IID=ADM_GWAS3_COM)
-covariates_oral <- left_join(european_id, covariates_oral, by="IID") %>% mutate(FID=IID) %>% mutate(SEX_ASK_COM=case_when(SEX_ASK_COM=="M" ~ 1, SEX_ASK_COM=="F" ~ 2, TRUE ~ 0))
-#convert brushing value
-covariates_oral <- covariates_oral %>% mutate(brushing_frequency=case_when(ORH_BRUSH_UNIT_MCQ==1 ~ ORH_BRUSH_NB_MCQ*365,
-                                                                                    ORH_BRUSH_UNIT_MCQ==2 ~ ORH_BRUSH_NB_MCQ*52,
-                                                                                    ORH_BRUSH_UNIT_MCQ==3 ~ ORH_BRUSH_NB_MCQ*12,
-                                                                                    ORH_BRUSH_UNIT_MCQ==4 ~ ORH_BRUSH_NB_MCQ,
-                                                                                      TRUE ~ NA)) %>% 
-  rename(Age=AGE_NMBR_COM, Sex=SEX_ASK_COM, Brushing_Frequency = brushing_frequency, Smoking_Status = ICQ_SMOKE_COM) %>% 
-  select(-ORH_BRUSH_NB_MCQ, -ORH_BRUSH_UNIT_MCQ)
-write.table(covariates_oral, "covariates_oral.txt", quote = FALSE, row.names = FALSE,
+covariates_oral <- bl_com %>% 
+select(
+    SEX_ASK_COM, 
+    AGE_NMBR_COM,
+    ADM_GWAS3_COM, 
+    ORH_BRUSH_NB_MCQ,
+    ORH_BRUSH_UNIT_MCQ,
+    contains("SDC_ETHN"), 
+    contains("SDC_CULT"), 
+    ED_UDR04_COM, 
+    WEA_INCNEEDS_MCQ,
+    ICQ_SMOKE_COM,
+    INC_TOT_COM,
+    ED_UDR04_COM,
+    GEN_HLTH_COM
+    ) %>%
+  rename(IID=ADM_GWAS3_COM, household_income=INC_TOT_COM, education=ED_UDR04_COM, general_health=GEN_HLTH_COM, age=AGE_NMBR_COM, sex=SEX_ASK_COM)
+
+covariates_oral <- left_join(high_sample_id %>% rename(IID="iid"), covariates_oral, by="IID") %>% mutate(FID=IID) %>% mutate(sex=case_when(sex=="M" ~ 1, sex=="F" ~ 2, TRUE ~ 0)) %>% 
+  mutate(household_income = ifelse(household_income %in% c(7, 8, 9), NA, household_income)) %>% 
+  mutate(general_health=ifelse(general_health %in% c(8,9), NA, general_health)) %>% 
+  mutate(education=ifelse(education==9, NA, education)) %>% 
+  mutate(brushing=case_when(ORH_BRUSH_UNIT_MCQ==1 & ORH_BRUSH_NB_MCQ==1~ 1,
+         ORH_BRUSH_UNIT_MCQ==1 & ORH_BRUSH_NB_MCQ!=1 ~ 2,
+         ORH_BRUSH_NB_MCQ==998 | ORH_BRUSH_NB_MCQ==999 ~ NA,
+         TRUE ~ 0)) %>% 
+  mutate(smoking=case_when(ICQ_SMOKE_COM==1 ~ 2, #Current somker=2
+                           ICQ_SMOKE_COM==2 ~ 0, #Never somoker=0
+                           ICQ_SMOKE_COM==3 ~1)) #Former smoker=1
+
+covariates_oral <- inner_join(covariates_oral, oral_health_binary_euro %>% select(IID), by="IID") %>% 
+  select(FID, IID, age, smoking, brushing, sex, household_income, general_health, education) %>% 
+   distinct(IID, .keep_all = TRUE)
+
+write.table(covariates_oral, "/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/covariates_oral.txt", quote = FALSE, row.names = FALSE,
             sep = "\t")
 
-write.table(covariates_oral %>% select(FID, IID, Sex), "update_sex.txt", quote = FALSE, row.names = FALSE,
+
+#covariates noneuro
+covariates_oral_noneuro <- inner_join(covariates_oral, noneuropean_id %>% rename(IID="iid") %>%  select(-fid), by="IID") %>% 
+  select(FID, IID, age, smoking, brushing, sex, household_income, general_health, education)
+
+write.table(covariates_oral_noneuro, "/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/covariates_oral_noneuro.txt", quote = FALSE, row.names = FALSE,
             sep = "\t")
-```
-
-Covariates for european
-
-```{r}
-#Sex 1=male; 2=female; other=unknown
-covariates_oral <- bl_com %>% select(ADM_GWAS3_COM,AGE_NMBR_COM, SEX_ASK_COM, ICQ_SMOKE_COM, ORH_BRUSH_NB_MCQ, ORH_BRUSH_UNIT_MCQ) %>%
-  rename(IID=ADM_GWAS3_COM)
-
-covariates_oral <- covariates_oral %>% #rename(IID=ADM_GWAS_COM) 
-  mutate(FID=IID) 
-#covariates_oral_noneuro <- left_join(noneuropean %>% select(IID, pca.cluster.id), covariates_oral, by="IID")
-
-#%>% mutate(SEX_ASK_COM=case_when(SEX_ASK_COM=="M" ~ 1, SEX_ASK_COM=="F" ~ 2, TRUE ~ 0))
-#convert brushing value
-covariates_oral <- covariates_oral %>% mutate(brushing_frequency=case_when(ORH_BRUSH_UNIT_MCQ==1 ~ ORH_BRUSH_NB_MCQ*365,
-                                                                                    ORH_BRUSH_UNIT_MCQ==2 ~ ORH_BRUSH_NB_MCQ*52,
-                                                                                    ORH_BRUSH_UNIT_MCQ==3 ~ ORH_BRUSH_NB_MCQ*12,
-                                                                                    ORH_BRUSH_UNIT_MCQ==4 ~ ORH_BRUSH_NB_MCQ,
-                                                                                      TRUE ~ NA)) %>% 
-  rename(Age=AGE_NMBR_COM, Sex=SEX_ASK_COM, Brushing_frequency = brushing_frequency, Smoking_status = ICQ_SMOKE_COM) %>% 
-  select(-ORH_BRUSH_NB_MCQ, -ORH_BRUSH_UNIT_MCQ) %>% select(FID, IID, everything())
 
 
-#write.table(covariates_oral_noneuro, "covariates_oral_noneuro.txt", quote = FALSE, row.names = FALSE,  sep = "\t")
 
+
+#write.table(covariates_oral %>% select(FID, IID, Sex), "update_sex.txt", quote = FALSE, row.names = FALSE, sep = "\t")
 ```
 
 ## Assess multicollinearity
 
 ```{r}
-library(corrplot)
-corrplot(cor(covariates_oral %>% select(-IID), use="complete.obs"), method="circle", # Increase space for labels
-         type="lower", tl.srt=45, mar.labels = c(2,2))
 
-corrplot(cor(covariates_oral_noneuro %>% select(-IID, -FID), use="complete.obs"), method="circle", # Increase space for labels
-         type="lower", tl.srt=45, mar.labels = c(2,2))
+png("correlation_confounders.png", width = 15, height = 15, units = "in", res = 450)
+corrplot(cor(covariates_oral %>% select(age, sex, smoking, household_income, brushing, general_health, education ), use="complete.obs"), method="circle", # Increase space for labels
+         type="lower",
+         tl.col = "black", tl.srt = 45, 
+         tl.cex = 2, 
+         addCoef.col = "black", 
+         number.cex = 1.6, cl.cex = 2)
+
+dev.off()
 
 ```
 
 ## Logistic regression with PLINK
 
 ```{bash}
-DATA=/home/mojan/Mojan_data/Genetics/Genomics3_clsa/output
+DATA=/home/mojan/Mojan_data/Genomics3_clsa/output
 
 #logistic regression
 
 plink --bfile $DATA/snp_t2r_european_sm_qc_maf0.01_updated_sex\
           --logistic --pheno $DATA/oral_health/oral_health_binary_euro.txt --all-pheno\
           --covar $DATA/oral_health/covariates_oral.txt \
-          --covar-name Age, Smoking_status, Brushing_frequency, Sex\
-          --out $DATA/oral_health/logistic_results/gwas
+          --covar-name age, smoking, brushing, sex, household_income, general_health, education\
+          --ci 0.95 --out $DATA/oral_health/logistic_results/gwas
           
 #plink --bfile $DATA/snp_t2r_european_sm_qc_maf0.01_updated_sex --recode --out $DATA/oral_health/snp_t2r_european_sm_qc_maf0.01_updated_sex
+
+#noneuropean
+plink --bfile $DATA/snp_t2r_noneuropean_sm_qc_maf0.01_updated_sex\
+          --logistic --pheno $DATA/oral_health/sore_jaw_muscles_noneuro.txt --all-pheno\
+          --covar $DATA/oral_health/covariates_oral_noneuro.txt \
+          --covar-name age, smoking, brushing, sex, household_income, general_health, education\
+          --ci 0.95\
+          --out $DATA/oral_health/logistic_results_noneuro/sore-jaw-muscles
 
 ```
 
 ## Summarize logistic regression results
 
 ```{r}
+snp_euro_oral <- read_excel("snp_euro_oral.xlsx", sheet="snp_euro_oral")
 logistic_results_oral <- list()
-logistic_combined_oral <- read.table("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/logistic_results/gwas.toothache.assoc.logistic",header = TRUE) %>% 
-  clean_names %>% mutate_all(tolower) %>% filter(test=="add")  %>%  left_join(., snp_euro, by="snp")
+logistic_combined_oral <- read.table("~/Mojan_data/Genomics3_clsa/output/oral_health/logistic_results/gwas.toothache.assoc.logistic",header = TRUE) %>% 
+  clean_names %>% mutate_all(tolower) %>% filter(test=="add")  %>%  left_join(., snp_euro_oral, by="snp")
 
-logistic_combined_oral_significant <- read.table("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/logistic_results/gwas.toothache.assoc.logistic",header = TRUE) %>% clean_names %>% mutate_all(tolower) %>% filter(test=="add")  %>%  left_join(., snp_euro, by="snp") %>% select(-p, -or, -test, -stat)
+logistic_combined_oral_significant <- read.table("~/Mojan_data/Genomics3_clsa/output/oral_health/logistic_results/gwas.toothache.assoc.logistic",header = TRUE) %>% clean_names %>% mutate_all(tolower) %>% filter(test=="add")  %>%  left_join(., snp_euro_oral, by="snp") %>% select(-p, -or, -test, -stat)
 
 
 # Loop through each phenotype
 for (phenotype in phenotypes) {
   # Read the corresponding file
-  file_path <- paste0("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/logistic_results/gwas.", phenotype, ".assoc.logistic")
+  file_path <- paste0("~/Mojan_data/Genomics3_clsa/output/oral_health/logistic_results/gwas.", phenotype, ".assoc.logistic")
   data <- read.table(file_path, header = TRUE)%>% clean_names() %>%
-    mutate_all(tolower) %>% filter(test=="add")
+    mutate_all(tolower) %>% filter(test=="add") %>% mutate(adjusted_p=as.numeric(p)*35)
   
   # Assign the dataframe to the list with the same name as phenotype
-  logistic_results_oral[[phenotype]] <- left_join(data, snp_euro %>% select(snp, gene, rsid, consequence), by="snp")
+  logistic_results_oral[[phenotype]] <- left_join(data, snp_euro_oral, by="snp")
   
-   logistic_combined_oral_significant <- left_join(logistic_combined_oral_significant, data %>% filter(p<0.05)%>% select(snp, p, or) %>% 
-                               rename(!!paste0("p_", phenotype) := p, !!paste0("or_", phenotype) := or), by="snp")
+   logistic_combined_oral_significant <- left_join(logistic_combined_oral_significant, data %>% filter(adjusted_p<0.06)%>%  select(snp, adjusted_p, or, l95, u95) %>% 
+    rename(!!paste0("adjusted_p_", phenotype) := adjusted_p, 
+           !!paste0("or_", phenotype) := or,
+           !!paste0("l95_", phenotype) := l95,
+           !!paste0("u95_", phenotype) := u95),
+    by="snp")
+
   
-  logistic_combined_oral <- left_join(logistic_combined_oral, data %>% 
-                               select(snp, p, or) %>% 
-                               rename(!!paste0("p_", phenotype) := p, !!paste0("or_", phenotype) := or), 
-                             by = "snp")
+  logistic_combined_oral <- left_join(
+  logistic_combined_oral, 
+  data %>% 
+    select(snp, adjusted_p, or, l95, u95) %>% 
+    rename(!!paste0("adjusted_p_", phenotype) := adjusted_p, 
+           !!paste0("or_", phenotype) := or,
+           !!paste0("l95_", phenotype) := l95,
+           !!paste0("u95_", phenotype) := u95),
+  by = "snp"
+)
+
   
 }
 
@@ -532,6 +596,12 @@ write.csv(logistic_combined_oral_significant, "logistic_combined_oral_significan
 #write.csv(inner_join(read_excel("logistic_combined_oral_significant.xlsx", sheet="t2r4_14_20"), snp_euro, by="snp"), "logistic_combined_oral_significant.csv", col.names = TRUE)
 ```
 
+Summarize logistic results for noneuropeans
+
+```{r}
+logistic_noneuro <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/logistic_results_noneuro/sore-jaw-muscles.sore_jaw_muscles.assoc.logistic",header = TRUE) %>% filter(TEST=="ADD")
+```
+
 Manhattan plots
 
 ```{r}
@@ -541,42 +611,42 @@ dev.new(width=11, height=4.5)
 for (phenotype in phenotypes) {
 
 # Prepare the data
-gwas_results <- read.table(paste0("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/logistic_results/gwas.", phenotype, ".assoc.logistic"), header = TRUE) %>% clean_names() %>% rename(chromosome=chr) %>%
-  mutate_all(tolower) %>% mutate(p=as.numeric(p)) %>% mutate(chromosome=as.numeric(chromosome)) %>% filter(test=="add")
+gwas_results <- read.table(paste0("~/Mojan_data/Genomics3_clsa/output/oral_health/logistic_results/gwas.", phenotype, ".assoc.logistic"), header = TRUE) %>% clean_names() %>% rename(chromosome=chr) %>%
+  mutate_all(tolower) %>% mutate(p=as.numeric(p)) %>% mutate(chromosome=as.numeric(chromosome)) %>%
+  filter(test=="add")
 
-gwas_results <- inner_join(gwas_results, snp_euro, by=c("snp"))
+gwas_results <- inner_join(gwas_results, snp_euro_oral %>% select(-chromosome), by=c("snp")) 
 
 gwas_results <- gwas_results %>%
   mutate(log_p = -log10(p)) %>% 
-  arrange(as.numeric(chromosome), bp) %>% 
+  arrange(chromosome, bp) %>% 
   mutate(label = paste(snp, gene, consequence, sep = "_"))  # create new LABEL column
 
 # Create an ordered factor for GENE based on the order in the arranged dataframe
-gwas_results$tas2r <- factor(gwas_results$gene, levels = unique(gwas_results$tas2r))
+gwas_results$gene <- factor(gwas_results$gene, levels = unique(gwas_results$gene))
 
-# Set a color palette with a large number of colors
 num_colors <- length(unique(gwas_results$gene))
 my_palette <- rainbow(num_colors)
 
-# Shuffle the palette
-set.seed(123)  # for reproducible results
+set.seed(123) 
 my_palette <- sample(my_palette)
 
 # Create a scatter plot
-manhattan_plot = ggplot(gwas_results, aes(x = tas2r, y = log_p, color = tas2r)) +
+manhattan_plot = ggplot(gwas_results, aes(x = gene, y = log_p, color = gene)) +
   geom_point(alpha = 0.5, size = 3.5) +
   scale_color_manual(values = my_palette) +
   geom_hline(yintercept = 1.3, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = 2.8, linetype = "dashed", color = "red") +
   geom_text(data = subset(gwas_results, log_p > 3.5), aes(label = label), size = 6, vjust = 0, hjust = 0,check_overlap = F) +
   # ggrepel::geom_text_repel(data = subset(gwas_results, log_p_bonferroni > 4), aes(label = LABEL), 
   #                        nudge_x = 0., nudge_y = 0.0, size = 3, check_overlap = F) +
   labs(title = gsub("_|ohp", " ", phenotype), x = NULL, y = "-log10(p-value)") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), text = element_text(size = 30),  plot.title = element_text(size = 30, face = "bold")) +
   guides(color = FALSE) +
-  scale_y_continuous(limits = c(0, 3))
+  scale_y_continuous(limits = c(0, 4))
 
 # Save the plot
-ggsave(paste0("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/logitmanhattan_plots/", phenotype, ".png"), plot = manhattan_plot, width = 11, height = 4.5, dpi = 450)
+ggsave(paste0("~/Mojan_data/Genomics3_clsa/output/oral_health/logitmanhattan_plots/", phenotype, ".png"), plot = manhattan_plot, width = 11, height = 4.5, dpi = 450)
 }
 ```
 
@@ -618,4 +688,244 @@ manhattan_plot <- ggplot(all_gwas_tas2r20, aes(x = phenotype, y = log_p, color =
 # Save the plot
 ggsave("~/Mojan_data/Genetics/Genomics3_clsa/output/oral_health/tas2r20/combined_plot.png", plot = manhattan_plot, width = 10, height = 6, dpi = 450)
 
+```
+
+## linkage disequilibrium heatmap
+
+Chromosome 12
+
+```{r}
+ld_oral <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/independent_markers/r_squared_no_filter.ld", header = T) %>% 
+  mutate(R2 = round(R2, 1)) %>% filter(CHR_A == 12)
+
+snp_euro <- read_excel("snp_euro_oral.xlsx", sheet="snp_euro_oral") %>%   
+  mutate(label = paste(rs_id, gene, sep = ","))
+
+ld_oral <- ld_oral %>%
+  left_join(snp_euro %>% filter(chromosome == 12) %>% select(snp, rs_id), by = c("SNP_A" = "snp")) %>%
+  rename(rs_id_A = rs_id) %>%
+  left_join(snp_euro %>% filter(chromosome == 12) %>% select(snp, rs_id), by = c("SNP_B" = "snp")) %>%
+  rename(rs_id_B = rs_id)
+
+# Create a vector of unique SNP labels
+snp_labels <- (snp_euro %>% filter(chromosome == 12))$rs_id
+
+# Create a matrix of R2 values, setting missing pairs as NA
+n_snps <- length(snp_labels)
+ld_matrix <- matrix(NA, nrow = n_snps, ncol = n_snps)  # Initialize with NA for missing data
+rownames(ld_matrix) <- colnames(ld_matrix) <- snp_labels
+
+for (i in 1:nrow(ld_oral)) {
+  idx_a <- which(snp_labels == ld_oral$rs_id_A[i])
+  idx_b <- which(snp_labels == ld_oral$rs_id_B[i])
+  ld_matrix[idx_a, idx_b] <- ld_matrix[idx_b, idx_a] <- ld_oral$R2[i]
+}
+
+# Define the list of rs_ids to highlight
+highlighted_rs_ids <- c("rs1548803", "rs3741845", "rs1015442", "rs1015443", 
+                        "rs3851584", "rs10772397", "rs1450839", "rs10845279", 
+                        "rs10845280", "rs10845281", "rs12226919", "rs12226920", 
+                        "rs11054142", "rs11054143", "rs7301234")
+
+highlight_labels <- function(labels) {
+  ifelse(labels %in% highlighted_rs_ids, paste0("*", labels, "*"), labels)
+}
+
+png("ld_heatmap_chr12.png", width = 25, height = 25, units = "in", res = 450)
+
+col_palette <- colorRampPalette(c("#F0F8FF","#003399"))(200)
+
+n_labels <- nrow(ld_matrix)
+gap <- max(1, floor(n_labels / 30))
+
+corrplot(ld_matrix, method = "color", type = "lower", 
+         tl.col = ifelse(rownames(ld_matrix) %in% highlighted_rs_ids, "red", "black"), 
+         tl.cex = 1.8,  # Adjust label size
+         mar = c(0,0,0,0),
+         tl.srt = 45,
+         diag = FALSE,
+         col = col_palette,
+         cl.cex = 2.5, 
+         addgrid.col = "gray",
+         na.label.col = "white",  # Set missing (NA) cells to gray
+         is.corr = FALSE,  
+         zlim = c(-0.2, 1),  
+         cl.ratio = 0.1,
+         cl.align = "r",
+         gap = gap)
+
+dev.off()
+
+```
+
+Chromosome 7
+
+```{r}
+ld_oral <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/independent_markers/r_squared_no_filter.ld", header = T) %>% 
+  mutate(R2 = round(R2, 1)) %>% filter(CHR_A == 7)
+
+snp_euro <- read_excel("snp_euro_oral.xlsx", sheet="snp_euro_oral") %>%   
+  mutate(label = paste(rs_id, gene, sep = ","))
+
+ld_oral <- ld_oral %>%
+  left_join(snp_euro %>% filter(chromosome == 7) %>% select(snp, rs_id), by = c("SNP_A" = "snp")) %>%
+  rename(rs_id_A = rs_id) %>%
+  left_join(snp_euro %>% filter(chromosome == 7) %>% select(snp, rs_id), by = c("SNP_B" = "snp")) %>%
+  rename(rs_id_B = rs_id)
+
+# Create a vector of unique SNP labels
+snp_labels <- (snp_euro %>% filter(chromosome == 7))$rs_id
+
+# Create a matrix of R2 values, setting missing pairs as NA
+n_snps <- length(snp_labels)
+ld_matrix <- matrix(NA, nrow = n_snps, ncol = n_snps)  # Initialize with NA for missing data
+rownames(ld_matrix) <- colnames(ld_matrix) <- snp_labels
+
+for (i in 1:nrow(ld_oral)) {
+  idx_a <- which(snp_labels == ld_oral$rs_id_A[i])
+  idx_b <- which(snp_labels == ld_oral$rs_id_B[i])
+  ld_matrix[idx_a, idx_b] <- ld_matrix[idx_b, idx_a] <- ld_oral$R2[i]
+}
+
+
+
+highlight_labels <- function(labels) {
+  ifelse(labels %in% highlighted_rs_ids, paste0("*", labels, "*"), labels)
+}
+
+png("ld_heatmap_chr7.png", width = 25, height = 25, units = "in", res = 450)
+
+col_palette <- colorRampPalette(c("#F0F8FF","#003399"))(200)
+
+n_labels <- nrow(ld_matrix)
+gap <- max(1, floor(n_labels / 30))
+
+corrplot(ld_matrix, method = "color", type = "lower", 
+         tl.col = ifelse(rownames(ld_matrix) %in% highlighted_rs_ids, "red", "black"), 
+         tl.cex = 1.8,  # Adjust label size
+         mar = c(0,0,0,0),
+         tl.srt = 45,
+         diag = FALSE,
+         col = col_palette,
+         cl.cex = 2.5, 
+         addgrid.col = "gray",
+         na.label.col = "white",  # Set missing (NA) cells to gray
+         is.corr = FALSE,  
+         zlim = c(-0.2, 1),  
+         cl.ratio = 0.1,
+         cl.align = "r",
+         gap = gap)
+
+dev.off()
+
+```
+
+Chromosome 5
+
+```{r}
+ld_oral <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/independent_markers/r_squared_no_filter.ld", header = T) %>% 
+  mutate(R2 = round(R2, 1)) %>% filter(CHR_A == 5)
+
+snp_euro <- read_excel("snp_euro_oral.xlsx", sheet="snp_euro_oral") %>%   
+  mutate(label = paste(rs_id, gene, sep = ","))
+
+ld_oral <- ld_oral %>%
+  left_join(snp_euro %>% filter(chromosome == 5) %>% select(snp, rs_id), by = c("SNP_A" = "snp")) %>%
+  rename(rs_id_A = rs_id) %>%
+  left_join(snp_euro %>% filter(chromosome == 5) %>% select(snp, rs_id), by = c("SNP_B" = "snp")) %>%
+  rename(rs_id_B = rs_id)
+snp_labels <- (snp_euro %>% filter(chromosome == 5))$rs_id
+
+# Create a matrix of R2 values, setting missing pairs as NA
+n_snps <- length(snp_labels)
+ld_matrix <- matrix(NA, nrow = n_snps, ncol = n_snps)  # Initialize with NA for missing data
+rownames(ld_matrix) <- colnames(ld_matrix) <- snp_labels
+
+for (i in 1:nrow(ld_oral)) {
+  idx_a <- which(snp_labels == ld_oral$rs_id_A[i])
+  idx_b <- which(snp_labels == ld_oral$rs_id_B[i])
+  ld_matrix[idx_a, idx_b] <- ld_matrix[idx_b, idx_a] <- ld_oral$R2[i]
+}
+
+
+png("ld_heatmap_chr5.png", width = 25, height = 25, units = "in", res = 450)
+
+col_palette <- colorRampPalette(c("#F0F8FF","#003399"))(200)
+corrplot(ld_matrix, method = "color", type = "lower", 
+         tl.col = ifelse(rownames(ld_matrix) %in% highlighted_rs_ids, "red", "black"),
+         tl.cex = 4,  # Adjust label size
+         mar = c(0,0,0,0),
+         tl.srt = 45,
+         diag = FALSE,
+         col = col_palette,
+         cl.cex = 3.5, 
+        na.label.col = "white",  # Set missing (NA) cells to gray
+         addgrid.col = "gray")
+
+dev.off()
+
+```
+
+## Classify based on type
+
+```{r}
+oral_classify <- snp_euro %>% group_by(gene) %>% tabyl(gene)
+snp_euro <- snp_euro %>% mutate(adjusted_p_value = as.numeric(adjusted_p_value))
+
+oral_classify <- left_join(oral_classify, snp_euro %>% filter(adjusted_p_value <0.05) %>% group_by(gene) %>% tabyl(gene) %>% select(-percent) %>% rename(n_different=n), by="gene") %>% 
+  mutate(relative_different=n_different/n)
+write.csv(oral_classify, "gene_type_classification.csv", col.names = T)
+```
+
+Read UKB files
+
+```{r}
+ukb_ra <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/UKB/RA", header = TRUE)
+ukb_osteo <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/UKB/osteoarthritis", header = TRUE)
+ukb_variants <- read.table("/home/mojan/Mojan_data/Genomics3_clsa/output/oral_health/UKB/variants.tsv", header = TRUE)
+
+#ra
+rsid_list <- c("rs1548803", "rs3741845", "rs1015442", "rs1015443", 
+               "rs3851584", "rs10772397", "rs1450839", "rs10845279", 
+               "rs10845280", "rs10845281", "rs12226919", "rs12226920", 
+               "rs11054142", "rs11054143", "rs7301234")
+
+ukb_ra_rsid <- ukb_ra  %>% 
+  left_join(ukb_variants %>% select(variant, rsid, consequence), by = "variant") %>%
+  filter(rsid %in% rsid_list)
+
+#osteo
+ukb_osteo_rsid <- ukb_osteo  %>% 
+  left_join(ukb_variants %>% select(variant, rsid, consequence), by = "variant") %>%
+  filter(rsid %in% rsid_list)
+
+write.csv(ukb_ra_rsid, "ukb_ra.csv", col.names = T)
+```
+
+```{r}
+oral_health
+
+oral_health_delete_later_M = oral_health %>% 
+  na.omit() %>% 
+  filter(sex == "M") %>% 
+  select(age) %>% 
+  pull()
+
+oral_health_delete_later_M
+
+oral_health_delete_later_F = oral_health %>% 
+  na.omit() %>% 
+  filter(sex == "F") %>% 
+  select(age) %>% 
+  pull()
+
+oral_health_delete_later_F
+
+```
+
+```{r}
+t.test(oral_health_delete_later_M, oral_health_delete_later_F)
+```
+
+```         
 ```
