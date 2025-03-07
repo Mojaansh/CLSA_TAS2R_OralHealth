@@ -902,30 +902,5 @@ ukb_osteo_rsid <- ukb_osteo  %>%
 write.csv(ukb_ra_rsid, "ukb_ra.csv", col.names = T)
 ```
 
-```{r}
-oral_health
-
-oral_health_delete_later_M = oral_health %>% 
-  na.omit() %>% 
-  filter(sex == "M") %>% 
-  select(age) %>% 
-  pull()
-
-oral_health_delete_later_M
-
-oral_health_delete_later_F = oral_health %>% 
-  na.omit() %>% 
-  filter(sex == "F") %>% 
-  select(age) %>% 
-  pull()
-
-oral_health_delete_later_F
-
-```
-
-```{r}
-t.test(oral_health_delete_later_M, oral_health_delete_later_F)
-```
-
 ```         
 ```
